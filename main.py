@@ -529,8 +529,7 @@ async def connect_personal_drive(drive_id: str = "drive_1", current_user: str = 
             },
             scopes=[
                 'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/drive',
                 'openid'
             ]
         )
@@ -642,8 +641,7 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
             },
             scopes=[
                 'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/drive',
                 'openid'
             ]
         )
