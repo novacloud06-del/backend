@@ -45,7 +45,11 @@ security = HTTPBearer()
 # Firebase Admin SDK initialization
 try:
     if not firebase_admin._apps:
-        cred = credentials.Certificate('./firebase-service-account.json')
+        firebase_creds_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        if firebase_creds_json:
+            cred = credentials.Certificate(json.loads(firebase_creds_json))
+        else:
+            cred = credentials.Certificate('./firebase-service-account.json')
         firebase_admin.initialize_app(cred)
     db = firestore.client()
 except Exception as e:
