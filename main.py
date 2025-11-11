@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel
 from typing import Optional, List
@@ -696,14 +696,17 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
                 <head>
                     <title>Authorization Complete</title>
                     <style>
-                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
-                        .success {{ color: #28a745; }}
+                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f8f9fa; }}
+                        .success {{ color: #28a745; margin-bottom: 20px; }}
+                        .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
                     </style>
                 </head>
                 <body>
-                    <h2 class="success">✅ Google Drive Connected Successfully!</h2>
-                    <p>Drive {drive_id} has been connected to your account.</p>
-                    <p>This window will close automatically...</p>
+                    <div class="container">
+                        <h2 class="success">✅ Success!</h2>
+                        <p>Google Drive {drive_id} connected successfully!</p>
+                        <p><small>This window will close automatically...</small></p>
+                    </div>
                     <script>
                         setTimeout(() => {{
                             window.close();
@@ -712,7 +715,6 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
                 </body>
                 </html>
                 """
-                from fastapi.responses import HTMLResponse
                 return HTMLResponse(content=html_content)
             else:
                 # Legacy format support
@@ -733,14 +735,17 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
                 <head>
                     <title>Authorization Complete</title>
                     <style>
-                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
-                        .success {{ color: #28a745; }}
+                        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f8f9fa; }}
+                        .success {{ color: #28a745; margin-bottom: 20px; }}
+                        .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
                     </style>
                 </head>
                 <body>
-                    <h2 class="success">✅ Google Drive Connected Successfully!</h2>
-                    <p>Drive 1 has been connected to your account.</p>
-                    <p>This window will close automatically...</p>
+                    <div class="container">
+                        <h2 class="success">✅ Success!</h2>
+                        <p>Google Drive connected successfully!</p>
+                        <p><small>This window will close automatically...</small></p>
+                    </div>
                     <script>
                         setTimeout(() => {{
                             window.close();
@@ -749,7 +754,6 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
                 </body>
                 </html>
                 """
-                from fastapi.responses import HTMLResponse
                 return HTMLResponse(content=html_content)
         else:
             # Save shared tokens for admin setup
@@ -768,14 +772,17 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
             <head>
                 <title>Authorization Error</title>
                 <style>
-                    body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
-                    .error {{ color: #dc3545; }}
+                    body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f8f9fa; }}
+                    .error {{ color: #dc3545; margin-bottom: 20px; }}
+                    .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
                 </style>
             </head>
             <body>
-                <h2 class="error">❌ Authorization Failed</h2>
-                <p>{error_message}</p>
-                <p>This window will close automatically...</p>
+                <div class="container">
+                    <h2 class="error">❌ Error</h2>
+                    <p>{error_message}</p>
+                    <p><small>This window will close automatically...</small></p>
+                </div>
                 <script>
                     setTimeout(() => {{
                         window.close();
@@ -784,7 +791,6 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
             </body>
             </html>
             """
-            from fastapi.responses import HTMLResponse
             return HTMLResponse(content=html_content)
         return {"error": f"Authorization failed: {str(e)}"}
 
