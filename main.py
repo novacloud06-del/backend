@@ -517,15 +517,29 @@ async def connect_personal_drive(drive_id: str = "drive_1", current_user: str = 
         raise HTTPException(status_code=400, detail=f"Drive number must be between 1 and {MAX_DRIVE_CONNECTIONS}")
     
     try:
-        flow = Flow.from_client_secrets_file(
-            'credentials.json',
-            scopes=[
-                'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
-                'openid'
-            ]
-        )
+        credentials_json = os.getenv('credentials.json')
+        if credentials_json:
+            import json
+            credentials_info = json.loads(credentials_json)
+            flow = Flow.from_client_config(
+                credentials_info,
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.file',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'openid'
+                ]
+            )
+        else:
+            flow = Flow.from_client_secrets_file(
+                'credentials.json',
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.file',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'openid'
+                ]
+            )
         flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
         
         state_value = f'user:{current_user}:drive:{drive_id}'
@@ -619,15 +633,29 @@ async def oauth2callback(code: str, state: Optional[str] = None):
     frontend_url = os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')
     
     try:
-        flow = Flow.from_client_secrets_file(
-            'credentials.json',
-            scopes=[
-                'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
-                'openid'
-            ]
-        )
+        credentials_json = os.getenv('credentials.json')
+        if credentials_json:
+            import json
+            credentials_info = json.loads(credentials_json)
+            flow = Flow.from_client_config(
+                credentials_info,
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.file',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'openid'
+                ]
+            )
+        else:
+            flow = Flow.from_client_secrets_file(
+                'credentials.json',
+                scopes=[
+                    'https://www.googleapis.com/auth/drive.file',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'openid'
+                ]
+            )
         flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
         
         # Add redirect_uri parameter to match what was used in authorization
