@@ -616,7 +616,7 @@ async def get_personal_drive_status(current_user: str = Depends(get_current_user
 
 @app.get("/oauth2callback")
 async def oauth2callback(code: str, state: Optional[str] = None):
-    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    frontend_url = os.getenv('FRONTEND_URL', 'https://novacloud22.web.app/')
     
     try:
         flow = Flow.from_client_secrets_file(
