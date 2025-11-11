@@ -520,10 +520,7 @@ async def connect_personal_drive(drive_id: str = "drive_1", current_user: str = 
         flow = Flow.from_client_secrets_file(
             'credentials.json',
                 scopes=[
-                'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
-                'openid'
+                'https://www.googleapis.com/auth/drive.file'
             ]
         )
         flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
@@ -633,10 +630,7 @@ async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None
                 }
             },
             scopes=[
-                'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile',
-                'openid'
+                'https://www.googleapis.com/auth/drive.file'
             ]
         )
         flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
