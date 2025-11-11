@@ -130,7 +130,6 @@ class FileInfo(BaseModel):
     webContentLink: Optional[str] = None
     path: Optional[str] = None
     basename: Optional[str] = None
-    parent_folder: Optional[str] = None
 
 class TwoFASetup(BaseModel):
     secret: str
@@ -617,7 +616,7 @@ async def get_personal_drive_status(current_user: str = Depends(get_current_user
 
 @app.get("/oauth2callback")
 async def oauth2callback(code: str, state: Optional[str] = None):
-    frontend_url = os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
     
     try:
         flow = Flow.from_client_secrets_file(
@@ -1010,21 +1009,13 @@ async def get_parallel_data(
 async def list_files(
     use_personal_drive: bool = False,
     drive_id: str = "drive_1",
-    folder_id: Optional[str] = None,
     current_user: str = Depends(get_current_user)
 ):
     if use_personal_drive:
         service = get_user_google_service(current_user, drive_id)
         if not service:
             return []
-        
-        # If folder_id is provided, show that folder's contents
-        # Otherwise show ALL files from the entire Google Drive
-        if folder_id:
-            folder_query = f"'{folder_id}' in parents and trashed=false"
-        else:
-            # Show ALL files from entire Google Drive including root and all folders
-            folder_query = "trashed=false"
+        folder_query = "'root' in parents and trashed=false"
     else:
         service = get_google_service()
         if not service:
@@ -1037,70 +1028,30 @@ async def list_files(
         user_folder_id = user_data.get('folder_id')
         if not user_folder_id:
             return []
-        
-        if folder_id:
-            folder_query = f"'{folder_id}' in parents and trashed=false"
-        else:
-            folder_query = f"'{user_folder_id}' in parents and trashed=false"
+        folder_query = f"'{user_folder_id}' in parents and trashed=false"
     
     try:
-        print(f"Listing files with query: {folder_query}")
-        print(f"Personal drive: {use_personal_drive}, Drive ID: {drive_id}, Folder ID: {folder_id}")
-        
         results = service.files().list(
             q=folder_query,
-            fields="files(id,name,size,mimeType,createdTime,webViewLink,webContentLink,parents)",
-            pageSize=1000  # Increase page size to get more files
+            fields="files(id,name,size,mimeType,createdTime,webViewLink,webContentLink)"
         ).execute()
         files = results.get('files', [])
-        
-        print(f"Found {len(files)} files")
         
         # Process files and calculate folder sizes
         processed_files = []
         for file in files:
-            try:
-                if file.get('mimeType') == 'application/vnd.google-apps.folder':
-                    # Calculate folder size
-                    try:
-                        folder_files = service.files().list(
-                            q=f"'{file['id']}' in parents and trashed=false",
-                            fields="files(size)"
-                        ).execute().get('files', [])
-                        total_size = sum(int(f.get('size', 0)) for f in folder_files if f.get('size'))
-                        file['size'] = total_size
-                    except Exception as e:
-                        print(f"Error calculating folder size for {file.get('name')}: {str(e)}")
-                        file['size'] = 0
-                
-                # Add parent folder info for personal drive to show file location
-                if use_personal_drive and not folder_id:
-                    parents = file.get('parents', [])
-                    if parents:
-                        parent_id = parents[0]
-                        if parent_id == 'root':
-                            file['parent_folder'] = 'Root'
-                        else:
-                            try:
-                                parent_info = service.files().get(fileId=parent_id, fields="name").execute()
-                                file['parent_folder'] = parent_info.get('name', 'Unknown Folder')
-                            except Exception as e:
-                                print(f"Error getting parent folder name for {file.get('name')}: {str(e)}")
-                                file['parent_folder'] = 'Unknown Folder'
-                    else:
-                        file['parent_folder'] = 'Root'
-                
-                processed_files.append(FileInfo(**file))
-            except Exception as e:
-                print(f"Error processing file {file.get('name', 'unknown')}: {str(e)}")
-                continue
+            if file.get('mimeType') == 'application/vnd.google-apps.folder':
+                # Calculate folder size
+                folder_files = service.files().list(
+                    q=f"'{file['id']}' in parents and trashed=false",
+                    fields="files(size)"
+                ).execute().get('files', [])
+                total_size = sum(int(f.get('size', 0)) for f in folder_files if f.get('size'))
+                file['size'] = total_size
+            processed_files.append(FileInfo(**file))
         
-        print(f"Successfully processed {len(processed_files)} files")
         return processed_files
-    except Exception as e:
-        print(f"Error listing files: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+    except:
         return []
 
 @app.get("/folder/{folder_id}/contents", response_model=List[FileInfo])
@@ -1943,40 +1894,6 @@ async def test_personal_drive(current_user: str = Depends(get_current_user), dri
             "connected": False,
             "error": str(e)
         }
-
-@app.get("/debug/personal-files")
-async def debug_personal_files(current_user: str = Depends(get_current_user), drive_id: str = "drive_1"):
-    """Debug endpoint to check personal drive files"""
-    service = get_user_google_service(current_user, drive_id)
-    
-    if not service:
-        return {"error": "Service not available"}
-    
-    try:
-        # Get all files (no folder restriction)
-        all_files = service.files().list(
-            q="trashed=false",
-            fields="files(id,name,size,mimeType,createdTime,parents)",
-            pageSize=50
-        ).execute().get('files', [])
-        
-        # Get root files specifically
-        root_files = service.files().list(
-            q="'root' in parents and trashed=false",
-            fields="files(id,name,size,mimeType,createdTime,parents)",
-            pageSize=50
-        ).execute().get('files', [])
-        
-        return {
-            "total_files": len(all_files),
-            "root_files_count": len(root_files),
-            "all_files_sample": all_files[:5],
-            "root_files_sample": root_files[:5],
-            "drive_id": drive_id,
-            "user": current_user
-        }
-    except Exception as e:
-        return {"error": str(e)}
 
 
 
