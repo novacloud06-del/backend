@@ -1111,16 +1111,18 @@ async def list_files(
         if not service:
             return []
         
+        user_data = get_user_from_firestore(current_user)
+        if not user_data:
+            return []
+        
+        user_folder_id = user_data.get('folder_id')
+        if not user_folder_id:
+            return []
+        
         if show_all:
-            folder_query = "trashed=false"
+            # For shared drive, show all files within user's folder recursively
+            folder_query = f"'{user_folder_id}' in parents and trashed=false"
         else:
-            user_data = get_user_from_firestore(current_user)
-            if not user_data:
-                return []
-            
-            user_folder_id = user_data.get('folder_id')
-            if not user_folder_id:
-                return []
             folder_query = f"'{user_folder_id}' in parents and trashed=false"
     
     try:
