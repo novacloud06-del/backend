@@ -623,8 +623,11 @@ async def get_personal_drive_status(current_user: str = Depends(get_current_user
     }
 
 @app.get("/oauth2callback")
-async def oauth2callback(code: str, state: Optional[str] = None):
+async def oauth2callback(code: Optional[str] = None, state: Optional[str] = None):
     frontend_url = os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')
+    
+    if not code:
+        return {"error": "Missing authorization code. This endpoint should only be accessed by Google OAuth."}
     
     try:
         flow = Flow.from_client_config(
@@ -646,8 +649,8 @@ async def oauth2callback(code: str, state: Optional[str] = None):
         )
         flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
         
-        # Add redirect_uri parameter to match what was used in authorization
-        flow.fetch_token(code=code, redirect_uri=flow.redirect_uri)
+        # Fetch token without duplicate redirect_uri
+        flow.fetch_token(code=code)
         credentials = flow.credentials
         
         # Ensure we have at least the drive.file scope
