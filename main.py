@@ -628,7 +628,7 @@ async def oauth2callback(code: str, state: Optional[str] = None):
                 'openid'
             ]
         )
-        flow.redirect_uri = GOOGLE_REDIRECT_URI
+        flow.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'https://backend-vjzu.onrender.com/oauth2callback')
         
         flow.fetch_token(code=code)
         credentials = flow.credentials
