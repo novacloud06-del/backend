@@ -17,6 +17,8 @@ import pyotp
 import qrcode
 import base64
 from io import BytesIO
+import secrets
+import hashlib
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -2435,3 +2437,55 @@ async def delete_account(
     except Exception as e:
         print(f"Account deletion error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete account")
+
+# New Features
+class ShareLinkRequest(BaseModel):
+    file_id: str
+    file_name: str
+    expiry_hours: Optional[int] = 24
+    allow_download: bool = True
+    allow_preview: bool = True
+    use_personal_drive: bool = False
+    drive_id: str = "drive_1"
+
+class EditorRequest(BaseModel):
+    file_id: str
+    file_name: str
+    mime_type: str
+    use_personal_drive: bool = False
+    drive_id: str = "drive_1"
+
+@app.post("/editor/initialize")
+async def initialize_editor(request: EditorRequest, current_user: str = Depends(get_current_user)):
+    editor_token = secrets.token_urlsafe(32)
+    if db:
+        db.collection('editor_sessions').document(editor_token).set({
+            'file_id': request.file_id, 'user_email': current_user,
+            'created_at': datetime.utcnow().isoformat(),
+            'expires_at': (datetime.utcnow() + timedelta(hours=2)).isoformat()
+        })
+    return {"editor_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/editor/{editor_token}"}
+
+@app.post("/share/generate-link")
+async def generate_share_link(request: ShareLinkRequest, current_user: str = Depends(get_current_user)):
+    share_token = secrets.token_urlsafe(16)
+    expires_at = datetime.utcnow() + timedelta(hours=request.expiry_hours) if request.expiry_hours else None
+    if db:
+        db.collection('share_links').document(share_token).set({
+            'file_id': request.file_id, 'owner_email': current_user,
+            'allow_download': request.allow_download, 'allow_preview': request.allow_preview,
+            'expires_at': expires_at.isoformat() if expires_at else None, 'access_count': 0
+        })
+    return {"share_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/share/{share_token}"}
+
+@app.get("/share/{share_token}")
+async def access_shared_file(share_token: str):
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
+    data = doc.to_dict()
+    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
+        doc.reference.delete()
+        raise HTTPException(status_code=410, detail="Share link expired")
+    doc.reference.update({'access_count': data.get('access_count', 0) + 1})
+    return {'file_id': data['file_id'], 'allow_download': data['allow_download'], 'allow_preview': data['allow_preview']}
