@@ -2532,6 +2532,35 @@ async def download_shared_file(share_token: str):
     file_io.seek(0)
     return StreamingResponse(io.BytesIO(file_io.read()), media_type='application/octet-stream', headers={"Content-Disposition": f'attachment; filename="{file_metadata["name"]}"'})
 
+@app.post("/share/{share_token}/expire")
+async def expire_shared_link(share_token: str, current_user: str = Depends(get_current_user)):
+    """Expire a shared link"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('share_links').document(share_token)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share link not found")
+        
+        link_data = doc.to_dict()
+        if link_data.get('owner_email') != current_user:
+            raise HTTPException(status_code=403, detail="Not authorized to modify this link")
+        
+        doc_ref.update({
+            'expires_at': datetime.utcnow().isoformat(),
+            'expired_by_user': True
+        })
+        
+        return {"message": "Link expired successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error expiring shared link: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to expire link")
+
 @app.get("/share/my-links")
 async def get_user_shared_links(current_user: str = Depends(get_current_user)):
     """Get all shared links created by the current user"""
