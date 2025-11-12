@@ -2894,7 +2894,7 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
     # Use provided file_id if available (for files within shared folder), otherwise use original file_id
     target_file_id = file_id if file_id else data['file_id']
     
-    # If file_id is provided, verify it's within the shared folder
+    # Only verify folder permissions if file_id is provided (accessing file within shared folder)
     if file_id:
         try:
             # Check if the original shared item is a folder
@@ -2911,7 +2911,11 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
                 raise
             raise HTTPException(status_code=404, detail="File not found")
     
-    file_metadata = service.files().get(fileId=target_file_id, fields='id,name,mimeType,size').execute()
+    try:
+        file_metadata = service.files().get(fileId=target_file_id, fields='id,name,mimeType,size').execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
+    
     file_name = file_metadata.get('name', '').lower()
     
     # Special handling for CSV files
@@ -3001,7 +3005,7 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
     # Use provided file_id if available (for files within shared folder), otherwise use original file_id
     target_file_id = file_id if file_id else data['file_id']
     
-    # If file_id is provided, verify it's within the shared folder
+    # Only verify folder permissions if file_id is provided (accessing file within shared folder)
     if file_id:
         try:
             # Check if the original shared item is a folder
@@ -3018,7 +3022,10 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
                 raise
             raise HTTPException(status_code=404, detail="File not found")
     
-    file_metadata = service.files().get(fileId=target_file_id, fields='id,name').execute()
+    try:
+        file_metadata = service.files().get(fileId=target_file_id, fields='id,name').execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
     
     def generate_stream():
         request = service.files().get_media(fileId=target_file_id)
