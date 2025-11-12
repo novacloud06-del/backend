@@ -1313,7 +1313,8 @@ async def preview_file(
         headers = {
             'Access-Control-Allow-Origin': '*',
             'Cache-Control': 'public, max-age=3600',
-            'Content-Length': str(len(file_io.getvalue()))
+            'Content-Length': str(len(file_io.getvalue())),
+            'Content-Disposition': 'inline'  # Default to inline for preview
         }
         
         # Enhanced file type handling
@@ -2448,31 +2449,9 @@ class ShareLinkRequest(BaseModel):
     use_personal_drive: bool = False
     drive_id: str = "drive_1"
 
-class EditorRequest(BaseModel):
-    file_id: str
-    file_name: str
-    mime_type: str
-    use_personal_drive: bool = False
-    drive_id: str = "drive_1"
 
-@app.post("/editor/initialize")
-async def initialize_editor(request: EditorRequest, current_user: str = Depends(get_current_user)):
-    editor_token = secrets.token_urlsafe(32)
-    if db:
-        db.collection('editor_sessions').document(editor_token).set({
-            'file_id': request.file_id, 'user_email': current_user,
-            'created_at': datetime.utcnow().isoformat(),
-            'expires_at': (datetime.utcnow() + timedelta(hours=2)).isoformat()
-        })
-    return {"editor_url": f"{os.getenv('FRONTEND_URL', 'https://novacloud22.web.app/')}/editor/{editor_token}"}
 
-@app.post("/editor/save")
-async def save_file_content(file_id: str = Form(...), content: str = Form(...), use_personal_drive: bool = Form(False), drive_id: str = Form("drive_1"), current_user: str = Depends(get_current_user)):
-    service = get_user_google_service(current_user, drive_id) if use_personal_drive else get_google_service()
-    if not service: raise HTTPException(status_code=400, detail="Drive not available")
-    media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/plain')
-    service.files().update(fileId=file_id, media_body=media).execute()
-    return {"message": "File saved successfully"}
+
 
 @app.post("/share/generate-link")
 async def generate_share_link(request: ShareLinkRequest, current_user: str = Depends(get_current_user)):
