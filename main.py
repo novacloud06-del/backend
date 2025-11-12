@@ -428,9 +428,10 @@ def update_user_storage(user_email: str):
         print(f"Error updating storage for {user_email}: {str(e)}")
 
 # Routes
+# Deployment trigger - v2.1 with share endpoints
 @app.get("/")
 async def root():
-    return {"message": "Novacloud API - Made in India 🇮🇳"}
+    return {"message": "Novacloud API - Made in India 🇮🇳 - v2.1"}
 
 @app.get("/test-share")
 async def test_share_endpoint():
@@ -2470,101 +2471,6 @@ async def generate_share_link(request: ShareLinkRequest, current_user: str = Dep
         })
     return {"share_url": f"{os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')}/share/{share_token}"}
 
-@app.get("/share/{share_token}")
-async def access_shared_file(share_token: str):
-    if not db: raise HTTPException(status_code=500, detail="Database not available")
-    doc = db.collection('share_links').document(share_token).get()
-    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
-    data = doc.to_dict()
-    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
-        doc.reference.delete()
-        raise HTTPException(status_code=410, detail="Share link expired")
-    doc.reference.update({'access_count': data.get('access_count', 0) + 1})
-    return {'file_id': data['file_id'], 'file_name': data['file_name'], 'allow_download': data['allow_download'], 'allow_preview': data['allow_preview']}
-
-@app.get("/share/{share_token}/preview")
-async def preview_shared_file(share_token: str):
-    if not db: raise HTTPException(status_code=500, detail="Database not available")
-    doc = db.collection('share_links').document(share_token).get()
-    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
-    data = doc.to_dict()
-    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
-        raise HTTPException(status_code=410, detail="Share link expired")
-    if not data['allow_preview']: raise HTTPException(status_code=403, detail="Preview not allowed")
-    
-    # Get appropriate service based on drive type
-    if data.get('use_personal_drive', False):
-        service = get_user_google_service(data['owner_email'], data.get('drive_id', 'drive_1'))
-    else:
-        service = get_google_service()
-    
-    if not service: raise HTTPException(status_code=500, detail="Service unavailable")
-    
-    file_metadata = service.files().get(fileId=data['file_id'], fields='id,name,mimeType,size').execute()
-    request = service.files().get_media(fileId=data['file_id'])
-    file_io = io.BytesIO()
-    downloader = MediaIoBaseDownload(file_io, request)
-    done = False
-    while not done: status, done = downloader.next_chunk()
-    file_io.seek(0)
-    return StreamingResponse(io.BytesIO(file_io.read()), media_type=file_metadata.get('mimeType', 'application/octet-stream'), headers={'Content-Disposition': 'inline'})
-
-@app.get("/share/{share_token}/download")
-async def download_shared_file(share_token: str):
-    if not db: raise HTTPException(status_code=500, detail="Database not available")
-    doc = db.collection('share_links').document(share_token).get()
-    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
-    data = doc.to_dict()
-    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
-        raise HTTPException(status_code=410, detail="Share link expired")
-    if not data['allow_download']: raise HTTPException(status_code=403, detail="Download not allowed")
-    
-    # Get appropriate service based on drive type
-    if data.get('use_personal_drive', False):
-        service = get_user_google_service(data['owner_email'], data.get('drive_id', 'drive_1'))
-    else:
-        service = get_google_service()
-    
-    if not service: raise HTTPException(status_code=500, detail="Service unavailable")
-    
-    file_metadata = service.files().get(fileId=data['file_id'], fields='id,name').execute()
-    request = service.files().get_media(fileId=data['file_id'])
-    file_io = io.BytesIO()
-    downloader = MediaIoBaseDownload(file_io, request)
-    done = False
-    while not done: status, done = downloader.next_chunk()
-    file_io.seek(0)
-    return StreamingResponse(io.BytesIO(file_io.read()), media_type='application/octet-stream', headers={"Content-Disposition": f'attachment; filename="{file_metadata["name"]}"'})
-
-@app.post("/share/{share_token}/expire")
-async def expire_shared_link(share_token: str, current_user: str = Depends(get_current_user)):
-    """Expire a shared link"""
-    if not db:
-        raise HTTPException(status_code=500, detail="Database not available")
-    
-    try:
-        doc_ref = db.collection('share_links').document(share_token)
-        doc = doc_ref.get()
-        
-        if not doc.exists:
-            raise HTTPException(status_code=404, detail="Share link not found")
-        
-        link_data = doc.to_dict()
-        if link_data.get('owner_email') != current_user:
-            raise HTTPException(status_code=403, detail="Not authorized to modify this link")
-        
-        doc_ref.update({
-            'expires_at': datetime.utcnow().isoformat(),
-            'expired_by_user': True
-        })
-        
-        return {"message": "Link expired successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error expiring shared link: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to expire link")
-
 @app.get("/share/my-links")
 async def get_user_shared_links(current_user: str = Depends(get_current_user)):
     """Get all shared links created by the current user"""
@@ -2690,6 +2596,101 @@ async def list_user_shares(current_user: str = Depends(get_current_user)):
     except Exception as e:
         print(f"Error listing shares: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to list shares")
+
+@app.get("/share/{share_token}")
+async def access_shared_file(share_token: str):
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
+    data = doc.to_dict()
+    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
+        doc.reference.delete()
+        raise HTTPException(status_code=410, detail="Share link expired")
+    doc.reference.update({'access_count': data.get('access_count', 0) + 1})
+    return {'file_id': data['file_id'], 'file_name': data['file_name'], 'allow_download': data['allow_download'], 'allow_preview': data['allow_preview']}
+
+@app.get("/share/{share_token}/preview")
+async def preview_shared_file(share_token: str):
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
+    data = doc.to_dict()
+    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
+        raise HTTPException(status_code=410, detail="Share link expired")
+    if not data['allow_preview']: raise HTTPException(status_code=403, detail="Preview not allowed")
+    
+    # Get appropriate service based on drive type
+    if data.get('use_personal_drive', False):
+        service = get_user_google_service(data['owner_email'], data.get('drive_id', 'drive_1'))
+    else:
+        service = get_google_service()
+    
+    if not service: raise HTTPException(status_code=500, detail="Service unavailable")
+    
+    file_metadata = service.files().get(fileId=data['file_id'], fields='id,name,mimeType,size').execute()
+    request = service.files().get_media(fileId=data['file_id'])
+    file_io = io.BytesIO()
+    downloader = MediaIoBaseDownload(file_io, request)
+    done = False
+    while not done: status, done = downloader.next_chunk()
+    file_io.seek(0)
+    return StreamingResponse(io.BytesIO(file_io.read()), media_type=file_metadata.get('mimeType', 'application/octet-stream'), headers={'Content-Disposition': 'inline'})
+
+@app.get("/share/{share_token}/download")
+async def download_shared_file(share_token: str):
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
+    data = doc.to_dict()
+    if data.get('expires_at') and datetime.utcnow() > datetime.fromisoformat(data['expires_at']):
+        raise HTTPException(status_code=410, detail="Share link expired")
+    if not data['allow_download']: raise HTTPException(status_code=403, detail="Download not allowed")
+    
+    # Get appropriate service based on drive type
+    if data.get('use_personal_drive', False):
+        service = get_user_google_service(data['owner_email'], data.get('drive_id', 'drive_1'))
+    else:
+        service = get_google_service()
+    
+    if not service: raise HTTPException(status_code=500, detail="Service unavailable")
+    
+    file_metadata = service.files().get(fileId=data['file_id'], fields='id,name').execute()
+    request = service.files().get_media(fileId=data['file_id'])
+    file_io = io.BytesIO()
+    downloader = MediaIoBaseDownload(file_io, request)
+    done = False
+    while not done: status, done = downloader.next_chunk()
+    file_io.seek(0)
+    return StreamingResponse(io.BytesIO(file_io.read()), media_type='application/octet-stream', headers={"Content-Disposition": f'attachment; filename="{file_metadata["name"]}"'})
+
+@app.post("/share/{share_token}/expire")
+async def expire_shared_link(share_token: str, current_user: str = Depends(get_current_user)):
+    """Expire a shared link"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('share_links').document(share_token)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share link not found")
+        
+        link_data = doc.to_dict()
+        if link_data.get('owner_email') != current_user:
+            raise HTTPException(status_code=403, detail="Not authorized to modify this link")
+        
+        doc_ref.update({
+            'expires_at': datetime.utcnow().isoformat(),
+            'expired_by_user': True
+        })
+        
+        return {"message": "Link expired successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error expiring shared link: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to expire link")
 
 @app.delete("/share/{share_token}")
 async def delete_share_link(share_token: str, current_user: str = Depends(get_current_user)):
