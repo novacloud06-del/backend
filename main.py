@@ -432,6 +432,10 @@ def update_user_storage(user_email: str):
 async def root():
     return {"message": "Novacloud API - Made in India 🇮🇳"}
 
+@app.get("/test-share")
+async def test_share_endpoint():
+    return {"message": "Share endpoints are working"}
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify services"""
@@ -2439,7 +2443,7 @@ async def delete_account(
         print(f"Account deletion error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete account")
 
-# New Features
+# Share Link Models
 class ShareLinkRequest(BaseModel):
     file_id: str
     file_name: str
