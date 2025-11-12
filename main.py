@@ -2466,6 +2466,14 @@ async def initialize_editor(request: EditorRequest, current_user: str = Depends(
         })
     return {"editor_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/editor/{editor_token}"}
 
+@app.post("/editor/save")
+async def save_file_content(file_id: str = Form(...), content: str = Form(...), use_personal_drive: bool = Form(False), drive_id: str = Form("drive_1"), current_user: str = Depends(get_current_user)):
+    service = get_user_google_service(current_user, drive_id) if use_personal_drive else get_google_service()
+    if not service: raise HTTPException(status_code=400, detail="Drive not available")
+    media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/plain')
+    service.files().update(fileId=file_id, media_body=media).execute()
+    return {"message": "File saved successfully"}
+
 @app.post("/share/generate-link")
 async def generate_share_link(request: ShareLinkRequest, current_user: str = Depends(get_current_user)):
     share_token = secrets.token_urlsafe(16)
@@ -2488,4 +2496,25 @@ async def access_shared_file(share_token: str):
         doc.reference.delete()
         raise HTTPException(status_code=410, detail="Share link expired")
     doc.reference.update({'access_count': data.get('access_count', 0) + 1})
-    return {'file_id': data['file_id'], 'allow_download': data['allow_download'], 'allow_preview': data['allow_preview']}
+    return {'file_id': data['file_id'], 'file_name': data['file_name'], 'allow_download': data['allow_download'], 'allow_preview': data['allow_preview']}
+
+@app.get("/share/{share_token}/preview")
+async def preview_shared_file(share_token: str):
+    share_info = await access_shared_file(share_token)
+    if not share_info['allow_preview']: raise HTTPException(status_code=403, detail="Preview not allowed")
+    return await preview_file(share_info['file_id'], False, "drive_1", None)
+
+@app.get("/share/{share_token}/download")
+async def download_shared_file(share_token: str):
+    share_info = await access_shared_file(share_token)
+    if not share_info['allow_download']: raise HTTPException(status_code=403, detail="Download not allowed")
+    service = get_google_service()
+    if not service: raise HTTPException(status_code=500, detail="Service unavailable")
+    file_metadata = service.files().get(fileId=share_info['file_id'], fields='id,name').execute()
+    request = service.files().get_media(fileId=share_info['file_id'])
+    file_io = io.BytesIO()
+    downloader = MediaIoBaseDownload(file_io, request)
+    done = False
+    while not done: status, done = downloader.next_chunk()
+    file_io.seek(0)
+    return StreamingResponse(io.BytesIO(file_io.read()), media_type='application/octet-stream', headers={"Content-Disposition": f'attachment; filename="{file_metadata["name"]}"'})
