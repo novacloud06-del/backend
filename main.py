@@ -2464,7 +2464,7 @@ async def initialize_editor(request: EditorRequest, current_user: str = Depends(
             'created_at': datetime.utcnow().isoformat(),
             'expires_at': (datetime.utcnow() + timedelta(hours=2)).isoformat()
         })
-    return {"editor_url": f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/editor/{editor_token}"}
+    return {"editor_url": f"{os.getenv('FRONTEND_URL', 'https://novacloud22.web.app/')}/editor/{editor_token}"}
 
 @app.post("/editor/save")
 async def save_file_content(file_id: str = Form(...), content: str = Form(...), use_personal_drive: bool = Form(False), drive_id: str = Form("drive_1"), current_user: str = Depends(get_current_user)):
