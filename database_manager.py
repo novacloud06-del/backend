@@ -17,61 +17,71 @@ class MultiFirestoreManager:
         """Initialize all Firestore databases from service account files"""
         # Initialize main auth project using FIREBASE_SERVICE_ACCOUNT_JSON
         firebase_creds_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        auth_cred = None
+        
         if firebase_creds_json:
             try:
                 auth_cred = credentials.Certificate(json.loads(firebase_creds_json))
-                self.auth_app = firebase_admin.initialize_app(auth_cred, name='auth')
-                
-                # Use main project as database too
-                main_app = firebase_admin.initialize_app(auth_cred, name='main_db')
-                self.firestore_clients['main'] = firestore.client(main_app)
-                self.database_count += 1
-                print(f"Initialized main project as auth + database: main")
+                print("Using Firebase credentials from environment variable")
             except Exception as e:
-                print(f"Failed to initialize main project: {e}")
-        else:
-            # Fallback to file
+                print(f"Failed to parse Firebase credentials from env var: {e}")
+        
+        # Fallback to file if env var failed or doesn't exist
+        if not auth_cred:
             auth_cred_path = 'firebase-service-account.json'
             if os.path.exists(auth_cred_path):
-                auth_cred = credentials.Certificate(auth_cred_path)
-                self.auth_app = firebase_admin.initialize_app(auth_cred, name='auth')
+                try:
+                    auth_cred = credentials.Certificate(auth_cred_path)
+                    print("Using Firebase credentials from local file")
+                except Exception as e:
+                    print(f"Failed to load Firebase credentials from file: {e}")
+        
+        if auth_cred:
+            try:
+                # Initialize default app for auth
+                self.auth_app = firebase_admin.initialize_app(auth_cred)
                 
-                # Use main project as database too
+                # Use same credentials for main database
                 main_app = firebase_admin.initialize_app(auth_cred, name='main_db')
                 self.firestore_clients['main'] = firestore.client(main_app)
                 self.database_count += 1
-                print(f"Initialized main project as auth + database: main")
+                print(f"✓ Firebase Auth and Firestore initialized successfully")
+            except Exception as e:
+                print(f"Failed to initialize Firebase: {e}")
+        else:
+            print("✗ No Firebase credentials found")
         
         # Initialize additional databases from environment variables
-        for i in range(1, 10):
-            db_cred_json = os.getenv(f'DB{i}_CREDENTIALS')
-            if db_cred_json:
-                try:
-                    db_name = f'db{i}'
-                    cred = credentials.Certificate(json.loads(db_cred_json))
-                    app = firebase_admin.initialize_app(cred, name=f'db_{db_name}')
-                    self.firestore_clients[db_name] = firestore.client(app)
-                    self.database_count += 1
-                    print(f"Initialized Firestore database: {db_name}")
-                except Exception as e:
-                    print(f"Failed to initialize DB{i}: {e}")
-        
-        # Fallback: Initialize from local files if no env vars
-        if self.database_count <= 1:  # Only main database initialized
-            db_dir = 'firestore_credentials'
-            if os.path.exists(db_dir):
-                for filename in os.listdir(db_dir):
-                    if filename.endswith('.json'):
-                        db_name = filename.replace('.json', '')
-                        cred_path = os.path.join(db_dir, filename)
-                        try:
-                            cred = credentials.Certificate(cred_path)
-                            app = firebase_admin.initialize_app(cred, name=f'db_{db_name}')
-                            self.firestore_clients[db_name] = firestore.client(app)
-                            self.database_count += 1
-                            print(f"Initialized Firestore database: {db_name}")
-                        except Exception as e:
-                            print(f"Failed to initialize {db_name}: {e}")
+        if auth_cred:  # Only try additional DBs if main auth worked
+            for i in range(1, 10):
+                db_cred_json = os.getenv(f'DB{i}_CREDENTIALS')
+                if db_cred_json:
+                    try:
+                        db_name = f'db{i}'
+                        cred = credentials.Certificate(json.loads(db_cred_json))
+                        app = firebase_admin.initialize_app(cred, name=f'db_{db_name}')
+                        self.firestore_clients[db_name] = firestore.client(app)
+                        self.database_count += 1
+                        print(f"Initialized additional Firestore database: {db_name}")
+                    except Exception as e:
+                        print(f"Failed to initialize DB{i}: {e}")
+            
+            # Fallback: Initialize from local files if no env vars
+            if self.database_count <= 1:  # Only main database initialized
+                db_dir = 'firestore_credentials'
+                if os.path.exists(db_dir):
+                    for filename in os.listdir(db_dir):
+                        if filename.endswith('.json'):
+                            db_name = filename.replace('.json', '')
+                            cred_path = os.path.join(db_dir, filename)
+                            try:
+                                cred = credentials.Certificate(cred_path)
+                                app = firebase_admin.initialize_app(cred, name=f'db_{db_name}')
+                                self.firestore_clients[db_name] = firestore.client(app)
+                                self.database_count += 1
+                                print(f"Initialized local Firestore database: {db_name}")
+                            except Exception as e:
+                                print(f"Failed to initialize {db_name}: {e}")
     
     def get_database_for_user(self, user_id: str) -> Optional[Client]:
         """Select database based on user ID hash for load balancing"""
@@ -168,3 +178,6 @@ class MultiFirestoreManager:
 
 # Global instance
 db_manager = MultiFirestoreManager()
+
+# For backward compatibility
+db = db_manager.get_database_for_user('default') if db_manager.database_count > 0 else None
