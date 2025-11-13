@@ -97,7 +97,7 @@ class MultiFirestoreManager:
             print(f"Error updating user data: {e}")
             return False
     
-        def delete_user_data(self, user_email: str) -> bool:
+    def delete_user_data(self, user_email: str) -> bool:
         """Delete user data from assigned Firestore database"""
         db = self.get_database_for_user(user_email)
         if not db:
