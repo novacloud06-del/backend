@@ -317,13 +317,20 @@ def cleanup_user_data(user_email: str):
             doc = doc_ref.get()
             if doc.exists:
                 doc_ref.delete()
-                cleanup_results[collection_name] = "deleted"
-                print(f"Deleted {collection_name} data for {user_email}")
+                # Verify deletion
+                verify_doc = doc_ref.get()
+                if not verify_doc.exists:
+                    cleanup_results[collection_name] = "deleted"
+                    print(f"✓ Deleted {collection_name} data for {user_email}")
+                else:
+                    cleanup_results[collection_name] = "delete_failed"
+                    print(f"✗ Failed to delete {collection_name} for {user_email}")
             else:
                 cleanup_results[collection_name] = "not_found"
+                print(f"- No {collection_name} data found for {user_email}")
         except Exception as e:
             cleanup_results[collection_name] = f"error: {str(e)}"
-            print(f"Error deleting {collection_name} for {user_email}: {str(e)}")
+            print(f"✗ Error deleting {collection_name} for {user_email}: {str(e)}")
     
     # Clean up share links (query-based)
     try:
@@ -331,14 +338,30 @@ def cleanup_user_data(user_email: str):
         query = shares_ref.where('owner_email', '==', user_email)
         docs = list(query.stream())
         deleted_count = 0
+        failed_count = 0
+        
         for doc in docs:
-            doc.reference.delete()
-            deleted_count += 1
-        cleanup_results['share_links'] = f"deleted_{deleted_count}"
-        print(f"Deleted {deleted_count} share links for {user_email}")
+            try:
+                doc_id = doc.id
+                doc.reference.delete()
+                # Verify deletion
+                verify_doc = db.collection('share_links').document(doc_id).get()
+                if not verify_doc.exists:
+                    deleted_count += 1
+                    print(f"✓ Deleted share link {doc_id}")
+                else:
+                    failed_count += 1
+                    print(f"✗ Failed to delete share link {doc_id}")
+            except Exception as e:
+                failed_count += 1
+                print(f"✗ Error deleting share link {doc.id}: {str(e)}")
+        
+        cleanup_results['share_links'] = f"deleted_{deleted_count}_failed_{failed_count}"
+        print(f"Share links: {deleted_count} deleted, {failed_count} failed")
+        
     except Exception as e:
         cleanup_results['share_links'] = f"error: {str(e)}"
-        print(f"Error deleting share links for {user_email}: {str(e)}")
+        print(f"✗ Error querying share links for {user_email}: {str(e)}")
     
     return cleanup_results
 
@@ -2468,6 +2491,48 @@ async def test_personal_drive(current_user: str = Depends(get_current_user), dri
 
 
 
+@app.get("/debug/user-data/{user_email}")
+async def debug_user_firestore_data(user_email: str):
+    """Debug endpoint to check what data exists for a user in Firestore"""
+    if not db:
+        return {"error": "Firestore not available"}
+    
+    collections_to_check = ['users', 'user_2fa', 'user_drive_tokens', 'email_change_requests']
+    user_data = {}
+    
+    # Check regular collections
+    for collection_name in collections_to_check:
+        try:
+            doc = db.collection(collection_name).document(user_email).get()
+            user_data[collection_name] = {
+                "exists": doc.exists,
+                "data": doc.to_dict() if doc.exists else None
+            }
+        except Exception as e:
+            user_data[collection_name] = {"error": str(e)}
+    
+    # Check share links
+    try:
+        shares_ref = db.collection('share_links')
+        query = shares_ref.where('owner_email', '==', user_email)
+        docs = list(query.stream())
+        user_data['share_links'] = {
+            "count": len(docs),
+            "links": [{
+                "id": doc.id,
+                "file_name": doc.to_dict().get('file_name'),
+                "created_at": doc.to_dict().get('created_at')
+            } for doc in docs]
+        }
+    except Exception as e:
+        user_data['share_links'] = {"error": str(e)}
+    
+    return {
+        "user_email": user_email,
+        "data": user_data,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
 @app.get("/debug/share/{share_token}")
 async def debug_share_link(share_token: str):
     """Debug endpoint to check share link status"""
@@ -2542,6 +2607,61 @@ async def debug_share_link(share_token: str):
 
 
 
+
+@app.post("/debug/test-cleanup/{user_email}")
+async def test_cleanup_for_user(user_email: str):
+    """Test cleanup function for a specific user (debug only)"""
+    if not db:
+        return {"error": "Firestore not available"}
+    
+    # First check what data exists
+    before_data = {}
+    collections_to_check = ['users', 'user_2fa', 'user_drive_tokens', 'email_change_requests']
+    
+    for collection_name in collections_to_check:
+        try:
+            doc = db.collection(collection_name).document(user_email).get()
+            before_data[collection_name] = doc.exists
+        except Exception as e:
+            before_data[collection_name] = f"error: {str(e)}"
+    
+    # Check share links
+    try:
+        shares_ref = db.collection('share_links')
+        query = shares_ref.where('owner_email', '==', user_email)
+        docs = list(query.stream())
+        before_data['share_links'] = len(docs)
+    except Exception as e:
+        before_data['share_links'] = f"error: {str(e)}"
+    
+    # Run cleanup
+    cleanup_results = cleanup_user_data(user_email)
+    
+    # Check what data exists after cleanup
+    after_data = {}
+    for collection_name in collections_to_check:
+        try:
+            doc = db.collection(collection_name).document(user_email).get()
+            after_data[collection_name] = doc.exists
+        except Exception as e:
+            after_data[collection_name] = f"error: {str(e)}"
+    
+    # Check share links after
+    try:
+        shares_ref = db.collection('share_links')
+        query = shares_ref.where('owner_email', '==', user_email)
+        docs = list(query.stream())
+        after_data['share_links'] = len(docs)
+    except Exception as e:
+        after_data['share_links'] = f"error: {str(e)}"
+    
+    return {
+        "user_email": user_email,
+        "before_cleanup": before_data,
+        "cleanup_results": cleanup_results,
+        "after_cleanup": after_data,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 if __name__ == "__main__":
     import uvicorn
@@ -2781,41 +2901,20 @@ async def delete_account(
                 except Exception as e:
                     print(f"Error deleting user folder: {str(e)}")
         
-        # Delete from ALL Firestore collections
+        # Delete from ALL Firestore collections using cleanup function
         if db:
-            collections_to_clean = [
-                'users',
-                'user_2fa', 
-                'user_drive_tokens',
-                'share_links',
-                'email_change_requests'
-            ]
-            
-            for collection_name in collections_to_clean:
-                try:
-                    if collection_name == 'share_links':
-                        # Delete all share links created by this user
-                        shares_ref = db.collection('share_links')
-                        query = shares_ref.where('owner_email', '==', current_user)
-                        docs = list(query.stream())
-                        for doc in docs:
-                            doc.reference.delete()
-                        print(f"Deleted {len(docs)} share links")
-                    else:
-                        # Delete user document from collection
-                        doc_ref = db.collection(collection_name).document(current_user)
-                        doc = doc_ref.get()
-                        if doc.exists:
-                            doc_ref.delete()
-                            print(f"Deleted {collection_name} data")
-                except Exception as e:
-                    print(f"Error deleting {collection_name}: {str(e)}")
+            print(f"Starting comprehensive cleanup for {current_user}")
+            cleanup_results = cleanup_user_data(current_user)
+            print(f"Cleanup results: {cleanup_results}")
         
         # Delete Firebase user last
         auth.delete_user(firebase_user.uid)
         print(f"Deleted Firebase user: {firebase_user.uid}")
         
-        return {"message": "Account deleted successfully"}
+        return {
+            "message": "Account deleted successfully",
+            "cleanup_results": cleanup_results if 'cleanup_results' in locals() else "No cleanup performed"
+        }
         
     except Exception as e:
         print(f"Account deletion error: {str(e)}")
