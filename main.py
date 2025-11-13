@@ -216,27 +216,43 @@ def get_google_service():
 
 def get_user_drive_tokens_from_firestore(user_email: str):
     """Get user drive tokens from Firestore"""
+    if not db_manager.db:
+        print("Database not available")
+        return {}
     return db_manager.get_user_tokens(user_email)
 
 def save_user_drive_tokens_to_firestore(user_email: str, tokens_data: dict):
     """Save user drive tokens to Firestore"""
+    if not db_manager.db:
+        print("Database not available")
+        return False
     success = db_manager.save_user_tokens(user_email, tokens_data)
     if success:
         print(f"Saved tokens to Firestore for {user_email}")
     else:
         print(f"Failed to save tokens for {user_email}")
+    return success
 
 # Firestore user management functions
 def get_user_from_firestore(user_email: str):
     """Get user data from Firestore"""
+    if not db_manager.db:
+        print("Database not available")
+        return None
     return db_manager.get_user_data(user_email)
 
 def save_user_to_firestore(user_email: str, user_data: dict):
     """Save user data to Firestore"""
+    if not db_manager.db:
+        print("Database not available")
+        return False
     return db_manager.save_user_data(user_email, user_data)
 
 def update_user_in_firestore(user_email: str, updates: dict):
     """Update specific fields for a user in Firestore"""
+    if not db_manager.db:
+        print("Database not available")
+        return False
     return db_manager.update_user_data(user_email, updates)
 
 def check_user_exists_in_firestore(user_email: str):
