@@ -3129,25 +3129,6 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
     except Exception as e:
         raise HTTPException(status_code=404, detail="File not found")
     
-    # Quick validation check before streaming
-    try:
-        # Just verify the file exists and we have access
-        file_info = service.files().get(fileId=target_file_id, fields='id,name').execute()
-        print(f"Validated file access for download: {file_info.get('name')} (ID: {target_file_id})")
-    except HttpError as e:
-        print(f"Google Drive validation error for file {target_file_id}: {e.resp.status} - {str(e)}")
-        if e.resp.status == 404:
-            raise HTTPException(status_code=404, detail="File not found or has been deleted")
-        elif e.resp.status == 403:
-            raise HTTPException(status_code=403, detail="Access denied to file")
-        elif e.resp.status == 429:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
-        else:
-            raise HTTPException(status_code=500, detail=f"Download failed: Google Drive error {e.resp.status}")
-    except Exception as e:
-        print(f"Validation error for file {target_file_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
-    
     def generate_stream():
         request = None
         downloader = None
@@ -3171,12 +3152,10 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
                         file_io.truncate(0)
                 except Exception as chunk_error:
                     print(f"Error during chunk download for {target_file_id}: {str(chunk_error)}")
-                    # Stop streaming on chunk error
                     break
                     
         except HttpError as e:
             print(f"Google Drive API error streaming file {target_file_id}: {str(e)}")
-            # For streaming, we can't raise HTTPException, so we yield an error response
             error_msg = f"Download failed: {e.resp.status}"
             if e.resp.status == 404:
                 error_msg = "File not found or has been deleted"
@@ -3184,8 +3163,6 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
                 error_msg = "Access denied to file"
             elif e.resp.status == 429:
                 error_msg = "Rate limit exceeded. Please try again later."
-            
-            # Yield a minimal error response that browsers will handle
             yield error_msg.encode('utf-8')
             
         except Exception as e:
@@ -3193,23 +3170,76 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
             yield f"Download failed: {str(e)}".encode('utf-8')
             
         finally:
-            # Clean up resources
             if file_io:
                 try:
                     file_io.close()
                 except:
                     pass
     
-    # Sanitize filename for download
+    # Get original filename and preserve extension
     filename = file_metadata.get('name', 'file')
-    # Remove or replace problematic Unicode characters
+    original_mime_type = file_metadata.get('mimeType', 'application/octet-stream')
+    
+    # Determine proper MIME type based on file extension if Google Drive MIME type is generic
+    file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
+    
+    # Map of file extensions to proper MIME types
+    mime_type_map = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'bmp': 'image/bmp',
+        'webp': 'image/webp',
+        'svg': 'image/svg+xml',
+        'pdf': 'application/pdf',
+        'txt': 'text/plain',
+        'csv': 'text/csv',
+        'json': 'application/json',
+        'xml': 'application/xml',
+        'html': 'text/html', 'htm': 'text/html',
+        'css': 'text/css',
+        'js': 'application/javascript',
+        'mp4': 'video/mp4',
+        'avi': 'video/x-msvideo',
+        'mov': 'video/quicktime',
+        'wmv': 'video/x-ms-wmv',
+        'flv': 'video/x-flv',
+        'webm': 'video/webm',
+        'mkv': 'video/x-matroska',
+        'mp3': 'audio/mpeg',
+        'wav': 'audio/wav',
+        'ogg': 'audio/ogg',
+        'aac': 'audio/aac',
+        'flac': 'audio/flac',
+        'doc': 'application/msword',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls': 'application/vnd.ms-excel',
+        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'ppt': 'application/vnd.ms-powerpoint',
+        'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'zip': 'application/zip',
+        'rar': 'application/x-rar-compressed',
+        '7z': 'application/x-7z-compressed',
+        'tar': 'application/x-tar',
+        'gz': 'application/gzip'
+    }
+    
+    # Use proper MIME type based on extension, fallback to original or octet-stream
+    proper_mime_type = mime_type_map.get(file_extension, original_mime_type)
+    if proper_mime_type == 'application/vnd.google-apps.document':
+        proper_mime_type = 'application/octet-stream'
+    
+    # Sanitize filename for download while preserving extension
     import re
-    safe_filename = re.sub(r'[^\x00-\x7F]+', '_', filename)  # Replace non-ASCII with underscore
-    safe_filename = safe_filename.replace('"', '').replace('\\', '_').replace('/', '_')
+    # Only replace problematic characters, keep the extension intact
+    safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Ensure filename is not empty and has proper extension
+    if not safe_filename or safe_filename == '_':
+        safe_filename = f'file.{file_extension}' if file_extension else 'file'
     
     return StreamingResponse(
         generate_stream(),
-        media_type='application/octet-stream',
+        media_type=proper_mime_type,
         headers={
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
             "Accept-Ranges": "bytes",
