@@ -3950,9 +3950,9 @@ async def get_shared_by_me(current_user: str = Depends(get_current_user)):
         print(f"Error getting shared by me: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to get shared files")
 
-@app.get("/shared/email/{share_id}/preview")
-async def preview_shared_email_file(share_id: str, current_user: str = Depends(get_current_user)):
-    """Preview a file shared via email"""
+@app.get("/shared/email/{share_id}")
+async def access_shared_email_file(share_id: str):
+    """Access a file shared via email - public endpoint without authentication"""
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -3965,9 +3965,49 @@ async def preview_shared_email_file(share_id: str, current_user: str = Depends(g
         
         share_data = doc.to_dict()
         
-        # Check if user is authorized (sender or recipient)
-        if share_data.get('sender_email') != current_user and share_data.get('recipient_email') != current_user:
-            raise HTTPException(status_code=403, detail="Not authorized to access this share")
+        # Check if share is active and not expired
+        if share_data.get('status') != 'active':
+            raise HTTPException(status_code=403, detail="Share is not active")
+        
+        if share_data.get('expires_at'):
+            expires_at = datetime.fromisoformat(share_data['expires_at'].replace('Z', ''))
+            if datetime.utcnow() > expires_at:
+                raise HTTPException(status_code=410, detail="Share has expired")
+        
+        return {
+            'file_id': share_data['file_id'],
+            'file_name': share_data['file_name'],
+            'allow_download': True,  # Email shares allow download by default
+            'allow_preview': True,   # Email shares allow preview by default
+            'sender_email': share_data.get('sender_email'),
+            'is_folder': False  # Email shares are typically single files
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error accessing shared email file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to access shared file")
+
+@app.get("/shared/email/{share_id}/preview")
+async def preview_shared_email_file(share_id: str, current_user: Optional[str] = Depends(get_optional_current_user)):
+    """Preview a file shared via email - accessible without authentication for public access"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('email_shares').document(share_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share not found")
+        
+        share_data = doc.to_dict()
+        
+        # If user is authenticated, check authorization (sender or recipient)
+        if current_user:
+            if share_data.get('sender_email') != current_user and share_data.get('recipient_email') != current_user:
+                raise HTTPException(status_code=403, detail="Not authorized to access this share")
         
         # Check if share is active and not expired
         if share_data.get('status') != 'active':
@@ -4007,13 +4047,50 @@ async def preview_shared_email_file(share_id: str, current_user: str = Depends(g
                     file_io.seek(0)
                     file_io.truncate(0)
         
+        # Enhanced file type handling for preview
+        file_name = file_metadata.get('name', '').lower()
+        mime_type = file_metadata.get('mimeType', 'application/octet-stream')
+        
+        # Get file extension
+        file_ext = file_name.split('.')[-1] if '.' in file_name else ''
+        
+        # Text files
+        if file_ext in ['txt', 'csv', 'log', 'md', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'htm', 'json', 'xml', 'yaml', 'yml', 'sql', 'php', 'rb', 'go', 'rs', 'kt', 'swift', 'dart', 'sh', 'bat', 'ps1', 'c', 'cpp', 'h', 'hpp', 'java', 'scala', 'r', 'lua', 'm', 'pl', 'ini', 'cfg', 'conf', 'toml']:
+            mime_type = 'text/plain; charset=utf-8'
+        # Images
+        elif file_ext in ['jpg', 'jpeg']:
+            mime_type = 'image/jpeg'
+        elif file_ext == 'png':
+            mime_type = 'image/png'
+        elif file_ext == 'gif':
+            mime_type = 'image/gif'
+        elif file_ext == 'svg':
+            mime_type = 'image/svg+xml'
+        elif file_ext in ['bmp', 'webp', 'ico', 'tiff', 'tif']:
+            mime_type = f'image/{file_ext}'
+        # Documents
+        elif file_ext == 'pdf':
+            mime_type = 'application/pdf'
+        # Videos
+        elif file_ext in ['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v', '3gp', 'ogv']:
+            mime_type = f'video/{"mp4" if file_ext == "m4v" else file_ext}'
+        # Audio
+        elif file_ext in ['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a', 'wma']:
+            mime_type = f'audio/{"mpeg" if file_ext == "mp3" else file_ext}'
+        
+        headers = {
+            'Content-Disposition': 'inline',
+            'Cache-Control': 'public, max-age=3600',
+            'Access-Control-Allow-Origin': '*'
+        }
+        
+        if mime_type.startswith('video/') or mime_type.startswith('audio/'):
+            headers['Accept-Ranges'] = 'bytes'
+        
         return StreamingResponse(
             generate_stream(),
-            media_type=file_metadata.get('mimeType', 'application/octet-stream'),
-            headers={
-                'Content-Disposition': 'inline',
-                'Cache-Control': 'public, max-age=3600'
-            }
+            media_type=mime_type,
+            headers=headers
         )
         
     except HTTPException:
@@ -4023,8 +4100,8 @@ async def preview_shared_email_file(share_id: str, current_user: str = Depends(g
         raise HTTPException(status_code=500, detail="Failed to preview file")
 
 @app.get("/shared/email/{share_id}/download")
-async def download_shared_email_file(share_id: str, current_user: str = Depends(get_current_user)):
-    """Download a file shared via email"""
+async def download_shared_email_file(share_id: str, current_user: Optional[str] = Depends(get_optional_current_user)):
+    """Download a file shared via email - accessible without authentication for public access"""
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -4037,9 +4114,10 @@ async def download_shared_email_file(share_id: str, current_user: str = Depends(
         
         share_data = doc.to_dict()
         
-        # Check if user is authorized (sender or recipient)
-        if share_data.get('sender_email') != current_user and share_data.get('recipient_email') != current_user:
-            raise HTTPException(status_code=403, detail="Not authorized to access this share")
+        # If user is authenticated, check authorization (sender or recipient)
+        if current_user:
+            if share_data.get('sender_email') != current_user and share_data.get('recipient_email') != current_user:
+                raise HTTPException(status_code=403, detail="Not authorized to access this share")
         
         # Check if share is active and not expired
         if share_data.get('status') != 'active':
@@ -4059,10 +4137,63 @@ async def download_shared_email_file(share_id: str, current_user: str = Depends(
         if not service:
             raise HTTPException(status_code=500, detail="Service unavailable")
         
-        # Get file metadata and stream
+        # Get file metadata and check if it's a folder
         file_id = share_data['file_id']
         file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
         
+        # Check if it's a folder
+        if file_metadata.get('mimeType') == 'application/vnd.google-apps.folder':
+            # Handle folder download as ZIP
+            import zipfile
+            import tempfile
+            
+            def generate_folder_zip():
+                with tempfile.NamedTemporaryFile() as temp_file:
+                    with zipfile.ZipFile(temp_file, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        # Get all files in the folder
+                        results = service.files().list(
+                            q=f"'{file_id}' in parents and trashed=false",
+                            fields="files(id,name,mimeType)"
+                        ).execute()
+                        
+                        for file_item in results.get('files', []):
+                            if file_item.get('mimeType') != 'application/vnd.google-apps.folder':
+                                try:
+                                    # Download file content
+                                    request = service.files().get_media(fileId=file_item['id'])
+                                    file_io = io.BytesIO()
+                                    downloader = MediaIoBaseDownload(file_io, request)
+                                    done = False
+                                    while not done:
+                                        status, done = downloader.next_chunk()
+                                    
+                                    # Add to ZIP
+                                    zip_file.writestr(file_item['name'], file_io.getvalue())
+                                except Exception as e:
+                                    print(f"Error adding file {file_item['name']} to ZIP: {str(e)}")
+                    
+                    temp_file.seek(0)
+                    while True:
+                        chunk = temp_file.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+            
+            folder_name = file_metadata['name']
+            import re
+            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', folder_name) + '.zip'
+            
+            return StreamingResponse(
+                generate_folder_zip(),
+                media_type='application/zip',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{safe_filename}"',
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            )
+        
+        # Handle regular file download
         def generate_stream():
             request = service.files().get_media(fileId=file_id)
             file_io = io.BytesIO()
@@ -4083,12 +4214,50 @@ async def download_shared_email_file(share_id: str, current_user: str = Depends(
         import re
         safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
         
+        # Comprehensive MIME type mapping for download
+        file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
+        mime_types = {
+            # Images
+            'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif',
+            'bmp': 'image/bmp', 'webp': 'image/webp', 'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+            'tiff': 'image/tiff', 'tif': 'image/tiff',
+            # Documents
+            'pdf': 'application/pdf', 'txt': 'text/plain', 'csv': 'text/csv', 'md': 'text/markdown',
+            'json': 'application/json', 'xml': 'application/xml', 'html': 'text/html', 'htm': 'text/html',
+            'css': 'text/css', 'js': 'application/javascript', 'jsx': 'text/jsx', 'ts': 'text/typescript',
+            'tsx': 'text/tsx', 'py': 'text/x-python', 'java': 'text/x-java-source', 'c': 'text/x-c',
+            'cpp': 'text/x-c++', 'h': 'text/x-c', 'hpp': 'text/x-c++', 'php': 'text/x-php',
+            'rb': 'text/x-ruby', 'go': 'text/x-go', 'rs': 'text/x-rust', 'kt': 'text/x-kotlin',
+            'swift': 'text/x-swift', 'dart': 'text/x-dart', 'sh': 'text/x-shellscript',
+            'bat': 'text/x-msdos-batch', 'ps1': 'text/x-powershell', 'sql': 'text/x-sql',
+            'yaml': 'text/yaml', 'yml': 'text/yaml', 'toml': 'text/x-toml', 'ini': 'text/plain',
+            'cfg': 'text/plain', 'conf': 'text/plain', 'log': 'text/plain',
+            # Office documents
+            'doc': 'application/msword', 'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel', 'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'ppt': 'application/vnd.ms-powerpoint', 'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            # Archives
+            'zip': 'application/zip', 'rar': 'application/x-rar-compressed', '7z': 'application/x-7z-compressed',
+            'tar': 'application/x-tar', 'gz': 'application/gzip', 'bz2': 'application/x-bzip2',
+            'xz': 'application/x-xz',
+            # Videos
+            'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime', 'wmv': 'video/x-ms-wmv',
+            'flv': 'video/x-flv', 'webm': 'video/webm', 'mkv': 'video/x-matroska', 'm4v': 'video/mp4',
+            '3gp': 'video/3gpp', 'ogv': 'video/ogg',
+            # Audio
+            'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg', 'aac': 'audio/aac',
+            'flac': 'audio/flac', 'm4a': 'audio/mp4', 'wma': 'audio/x-ms-wma'
+        }
+        proper_mime_type = mime_types.get(file_extension, 'application/octet-stream')
+        
         return StreamingResponse(
             generate_stream(),
-            media_type='application/octet-stream',
+            media_type=proper_mime_type,
             headers={
                 'Content-Disposition': f'attachment; filename="{safe_filename}"',
-                'Cache-Control': 'no-cache'
+                'Cache-Control': 'no-cache',
+                'Access-Control-Allow-Origin': '*',
+                'Accept-Ranges': 'bytes'
             }
         )
         
@@ -4100,7 +4269,7 @@ async def download_shared_email_file(share_id: str, current_user: str = Depends(
 
 @app.delete("/shared/email/{share_id}")
 async def delete_email_share(share_id: str, current_user: str = Depends(get_current_user)):
-    """Delete/expire an email share"""
+    """Delete/expire an email share - requires authentication"""
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -4135,7 +4304,7 @@ async def delete_email_share(share_id: str, current_user: str = Depends(get_curr
 
 @app.post("/shared/toggle/{share_id}")
 async def toggle_email_share(share_id: str, current_user: str = Depends(get_current_user)):
-    """Toggle email share status (activate/deactivate)"""
+    """Toggle email share status (activate/deactivate) - requires authentication"""
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
