@@ -548,9 +548,17 @@ async def check_user_exists(email: str):
 @app.post("/register-user")
 async def register_user(user_data: UserCreate):
     """Register a new user in the database"""
-    if check_user_exists_in_firestore(user_data.email):
-        raise HTTPException(status_code=400, detail="User already exists")
+    # Check if user already exists
+    existing_user = get_user_from_firestore(user_data.email)
+    if existing_user:
+        # User exists, just update last_login and return success
+        update_user_in_firestore(user_data.email, {
+            "last_login": datetime.utcnow().isoformat(),
+            "uid": user_data.uid  # Update UID in case it changed
+        })
+        return {"message": "User login successful"}
     
+    # Create new user
     new_user = {
         "email": user_data.email,
         "name": user_data.name,
@@ -1442,11 +1450,34 @@ async def list_files(
         
         user_data = get_user_from_firestore(current_user)
         if not user_data:
-            return []
+            # User not found in Firestore, create minimal user record
+            try:
+                firebase_user = auth.get_user_by_email(current_user)
+                new_user = {
+                    "email": current_user,
+                    "name": firebase_user.display_name or "User",
+                    "uid": firebase_user.uid,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "storage_used": 0,
+                    "total_files": 0,
+                    "total_folders": 0,
+                    "last_login": datetime.utcnow().isoformat(),
+                    "folder_id": None
+                }
+                save_user_to_firestore(current_user, new_user)
+                user_data = new_user
+            except Exception as e:
+                print(f"Error creating user record: {str(e)}")
+                return []
         
         user_folder_id = user_data.get('folder_id')
         if not user_folder_id:
-            return []
+            # Create user folder if it doesn't exist
+            user_folder_id = get_user_folder(service, user_data['name'])
+            if user_folder_id:
+                update_user_in_firestore(current_user, {'folder_id': user_folder_id})
+            else:
+                return []
         
         if show_all:
             # For shared drive, show all files within user's folder recursively
@@ -1970,11 +2001,29 @@ async def websocket_endpoint(websocket: WebSocket, user_email: str):
 @app.get("/user/storage")
 async def get_user_storage(current_user: str = Depends(get_current_user)):
     """Get real-time storage usage for the current user"""
-    if not check_user_exists_in_firestore(current_user):
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Get user data and ensure folder exists
     user_data = get_user_from_firestore(current_user)
+    if not user_data:
+        # Create user record if missing
+        try:
+            firebase_user = auth.get_user_by_email(current_user)
+            new_user = {
+                "email": current_user,
+                "name": firebase_user.display_name or "User",
+                "uid": firebase_user.uid,
+                "created_at": datetime.utcnow().isoformat(),
+                "storage_used": 0,
+                "total_files": 0,
+                "total_folders": 0,
+                "last_login": datetime.utcnow().isoformat(),
+                "folder_id": None
+            }
+            save_user_to_firestore(current_user, new_user)
+            user_data = new_user
+        except Exception as e:
+            print(f"Error creating user record: {str(e)}")
+            raise HTTPException(status_code=404, detail="User not found")
+    
+    # user_data already retrieved above
     service = get_google_service()
     
     if not service:
