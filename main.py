@@ -1507,10 +1507,12 @@ async def download_file(
                     file_io.truncate(0)
         
         filename = file_metadata['name']
-        # Sanitize filename for download
+        # Sanitize filename for download while preserving extension
         import re
-        safe_filename = re.sub(r'[^\x00-\x7F]+', '_', filename)  # Replace non-ASCII with underscore
-        safe_filename = safe_filename.replace('"', '').replace('\\', '_').replace('/', '_')
+        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        if not safe_filename or safe_filename == '_':
+            file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
+            safe_filename = f'file.{file_extension}' if file_extension else 'file'
         
         headers = {
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
@@ -3178,68 +3180,17 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
     
     # Get original filename and preserve extension
     filename = file_metadata.get('name', 'file')
-    original_mime_type = file_metadata.get('mimeType', 'application/octet-stream')
-    
-    # Determine proper MIME type based on file extension if Google Drive MIME type is generic
-    file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
-    
-    # Map of file extensions to proper MIME types
-    mime_type_map = {
-        'png': 'image/png',
-        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-        'gif': 'image/gif',
-        'bmp': 'image/bmp',
-        'webp': 'image/webp',
-        'svg': 'image/svg+xml',
-        'pdf': 'application/pdf',
-        'txt': 'text/plain',
-        'csv': 'text/csv',
-        'json': 'application/json',
-        'xml': 'application/xml',
-        'html': 'text/html', 'htm': 'text/html',
-        'css': 'text/css',
-        'js': 'application/javascript',
-        'mp4': 'video/mp4',
-        'avi': 'video/x-msvideo',
-        'mov': 'video/quicktime',
-        'wmv': 'video/x-ms-wmv',
-        'flv': 'video/x-flv',
-        'webm': 'video/webm',
-        'mkv': 'video/x-matroska',
-        'mp3': 'audio/mpeg',
-        'wav': 'audio/wav',
-        'ogg': 'audio/ogg',
-        'aac': 'audio/aac',
-        'flac': 'audio/flac',
-        'doc': 'application/msword',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'xls': 'application/vnd.ms-excel',
-        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'ppt': 'application/vnd.ms-powerpoint',
-        'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'zip': 'application/zip',
-        'rar': 'application/x-rar-compressed',
-        '7z': 'application/x-7z-compressed',
-        'tar': 'application/x-tar',
-        'gz': 'application/gzip'
-    }
-    
-    # Use proper MIME type based on extension, fallback to original or octet-stream
-    proper_mime_type = mime_type_map.get(file_extension, original_mime_type)
-    if proper_mime_type == 'application/vnd.google-apps.document':
-        proper_mime_type = 'application/octet-stream'
     
     # Sanitize filename for download while preserving extension
     import re
-    # Only replace problematic characters, keep the extension intact
     safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    # Ensure filename is not empty and has proper extension
     if not safe_filename or safe_filename == '_':
+        file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
         safe_filename = f'file.{file_extension}' if file_extension else 'file'
     
     return StreamingResponse(
         generate_stream(),
-        media_type=proper_mime_type,
+        media_type='application/octet-stream',
         headers={
             "Content-Disposition": f'attachment; filename="{safe_filename}"',
             "Accept-Ranges": "bytes",
