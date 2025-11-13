@@ -12,8 +12,7 @@ import uuid
 import asyncio
 from datetime import datetime, timedelta
 import firebase_admin
-from firebase_admin import auth
-from database_manager import db_manager
+from firebase_admin import credentials, auth, firestore
 import pyotp
 import qrcode
 import base64
@@ -36,39 +35,28 @@ app = FastAPI(title="Novacloud API")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://novacloud22.web.app",
-        "https://novacloud22.firebaseapp.com", 
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    allow_headers=[
-        "*",
-        "Authorization", 
-        "Content-Type", 
-        "Accept", 
-        "Origin", 
-        "X-Requested-With",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers"
-    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Security
 security = HTTPBearer()
 
-# Initialize Firebase Auth (from main auth project)
-auth_app = db_manager.get_auth_app()
-if not auth_app:
-    print("Warning: Firebase Auth not initialized")
-else:
-    print(f"✓ Firebase Auth initialized")
-
-# For backward compatibility - get a default database reference
-db = db_manager.db
+# Firebase Admin SDK initialization
+try:
+    if not firebase_admin._apps:
+        firebase_creds_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        if firebase_creds_json:
+            cred = credentials.Certificate(json.loads(firebase_creds_json))
+        else:
+            cred = credentials.Certificate('./firebase-service-account.json')
+        firebase_admin.initialize_app(cred)
+    db = firestore.client()
+except Exception as e:
+    print(f"Firebase initialization failed: {str(e)}")
+    db = None
 
 # Google OAuth settings
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -96,11 +84,17 @@ def save_json_file(filename, data):
 # Legacy JSON loading (will be removed)
 user_tokens = load_json_file(TOKENS_FILE)
 user_sessions = load_json_file(SESSIONS_FILE)
-# Test database setup
-if db_manager.db:
-    print(f"✓ Firestore database initialized")
+# Test Firestore connection on startup
+if db:
+    try:
+        test_doc = db.collection('startup_test').document('backend_init')
+        test_doc.set({'timestamp': datetime.utcnow().isoformat(), 'status': 'backend_started'})
+        print("✓ Firestore connection successful")
+    except Exception as e:
+        print(f"✗ Firestore connection failed: {str(e)}")
+        print("Warning: User data will not be saved/retrieved properly")
 else:
-    print("✗ No Firestore database initialized")
+    print("✗ Firestore not initialized")
 active_connections = {}
 
 # Pydantic models
@@ -216,54 +210,91 @@ def get_google_service():
 
 def get_user_drive_tokens_from_firestore(user_email: str):
     """Get user drive tokens from Firestore"""
-    if not db_manager.db:
-        print("Database not available")
+    if not db:
         return {}
-    return db_manager.get_user_tokens(user_email)
+    try:
+        doc_ref = db.collection('user_drive_tokens').document(user_email)
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+        return {}
+    except Exception as e:
+        print(f"Error getting tokens from Firestore: {str(e)}")
+        return {}
 
 def save_user_drive_tokens_to_firestore(user_email: str, tokens_data: dict):
     """Save user drive tokens to Firestore"""
-    if not db_manager.db:
-        print("Database not available")
-        return False
-    success = db_manager.save_user_tokens(user_email, tokens_data)
-    if success:
+    if not db:
+        print(f"Firestore not available, cannot save tokens for {user_email}")
+        return
+    try:
+        doc_ref = db.collection('user_drive_tokens').document(user_email)
+        doc_ref.set(tokens_data)
         print(f"Saved tokens to Firestore for {user_email}")
-    else:
-        print(f"Failed to save tokens for {user_email}")
-    return success
+    except Exception as e:
+        print(f"Error saving tokens to Firestore: {str(e)}")
 
 # Firestore user management functions
 def get_user_from_firestore(user_email: str):
     """Get user data from Firestore"""
-    if not db_manager.db:
-        print("Database not available")
+    if not db:
         return None
-    return db_manager.get_user_data(user_email)
+    try:
+        doc_ref = db.collection('users').document(user_email)
+        doc = doc_ref.get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Error getting user from Firestore: {str(e)}")
+        return None
 
 def save_user_to_firestore(user_email: str, user_data: dict):
     """Save user data to Firestore"""
-    if not db_manager.db:
-        print("Database not available")
+    if not db:
+        print(f"Firestore not available, cannot save user {user_email}")
         return False
-    return db_manager.save_user_data(user_email, user_data)
+    try:
+        doc_ref = db.collection('users').document(user_email)
+        doc_ref.set(user_data, merge=True)
+        return True
+    except Exception as e:
+        print(f"Error saving user to Firestore: {str(e)}")
+        return False
 
 def update_user_in_firestore(user_email: str, updates: dict):
     """Update specific fields for a user in Firestore"""
-    if not db_manager.db:
-        print("Database not available")
+    if not db:
         return False
-    return db_manager.update_user_data(user_email, updates)
+    try:
+        doc_ref = db.collection('users').document(user_email)
+        doc_ref.update(updates)
+        return True
+    except Exception as e:
+        print(f"Error updating user in Firestore: {str(e)}")
+        return False
 
 def check_user_exists_in_firestore(user_email: str):
     """Check if user exists in Firestore"""
-    user_data = db_manager.get_user_data(user_email)
-    return user_data is not None
+    if not db:
+        return False
+    try:
+        doc_ref = db.collection('users').document(user_email)
+        doc = doc_ref.get()
+        return doc.exists
+    except Exception as e:
+        print(f"Error checking user existence: {str(e)}")
+        return False
 
 def get_all_users_from_firestore():
     """Get all users from Firestore (for statistics)"""
-    # This would need to query all databases - simplified for now
-    return []
+    if not db:
+        return []
+    try:
+        users_ref = db.collection('users')
+        docs = users_ref.stream()
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        print(f"Error getting all users: {str(e)}")
+        return []
 
 def get_user_google_service(user_email: str, drive_id: str = "drive_1"):
     """Get Google Drive service for a specific user's personal account"""
@@ -412,41 +443,35 @@ def update_user_storage(user_email: str):
 async def root():
     return {"message": "Novacloud API - Made in India 🇮🇳 - v2.1"}
 
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    return {"message": "OK"}
-
 @app.get("/test-share")
 async def test_share_endpoint():
     return {"message": "Share endpoints are working"}
-
-@app.get("/test-cors")
-async def test_cors():
-    return {
-        "message": "CORS test successful",
-        "timestamp": datetime.utcnow().isoformat(),
-        "firebase_initialized": auth_app is not None,
-        "firestore_connected": db_manager.db is not None
-    }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify services"""
     shared_service = get_google_service()
     
+    # Test Firestore connection
+    firestore_working = False
+    if db:
+        try:
+            test_doc = db.collection('health_check').document('test')
+            test_doc.set({'timestamp': datetime.utcnow().isoformat()})
+            firestore_working = True
+        except Exception as e:
+            print(f"Firestore health check failed: {str(e)}")
+    
     return {
         "status": "healthy",
         "shared_drive_connected": shared_service is not None,
-        "firestore_connected": db_manager.db is not None,
+        "firestore_connected": firestore_working,
         "timestamp": datetime.utcnow().isoformat()
     }
 
 @app.post("/check-user-exists")
-async def check_user_exists(request: dict):
+async def check_user_exists(email: str):
     """Check if user exists in database"""
-    email = request.get('email')
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
     return {"exists": check_user_exists_in_firestore(email)}
 
 @app.post("/register-user")
@@ -551,9 +576,12 @@ async def disconnect_personal_drive(drive_id: str = "drive_1", current_user: str
         del user_tokens[drive_id]
         if user_tokens:
             save_user_drive_tokens_to_firestore(current_user, user_tokens)
-        else:
-            # Delete all tokens if no drives left
-            db_manager.save_user_tokens(current_user, {})
+        elif db:
+            # Delete document if no drives left
+            try:
+                db.collection('user_drive_tokens').document(current_user).delete()
+            except Exception as e:
+                print(f"Error deleting tokens: {str(e)}")
     
     return {"message": f"Google Drive {drive_id} disconnected successfully"}
 
@@ -2187,17 +2215,16 @@ async def debug_personal_drive(user_email: str, drive_id: str = "drive_2"):
 
 @app.get("/test-firestore")
 async def test_firestore_connection():
-    """Test Firestore database connections"""
-    if not db_manager.db:
+    """Test Firestore database connection"""
+    if not db:
         return {
             "firestore_connected": False,
-            "error": "No Firestore database initialized"
+            "error": "Firestore not initialized"
         }
     
-    results = {}
     try:
         # Test write
-        test_doc = db_manager.db.collection('connection_test').document('api_test')
+        test_doc = db.collection('connection_test').document('api_test')
         test_data = {
             'timestamp': datetime.utcnow().isoformat(),
             'status': 'testing'
@@ -2209,26 +2236,20 @@ async def test_firestore_connection():
         if doc.exists:
             # Clean up
             test_doc.delete()
-            results['main'] = {
-                "connected": True,
+            return {
+                "firestore_connected": True,
                 "test_data": doc.to_dict()
             }
         else:
-            results['main'] = {
-                "connected": False,
+            return {
+                "firestore_connected": False,
                 "error": "Document not found after write"
             }
     except Exception as e:
-        results['main'] = {
-            "connected": False,
+        return {
+            "firestore_connected": False,
             "error": str(e)
         }
-    
-    return {
-        "total_databases": 1,
-        "database_results": results
-    }
-
 
 @app.get("/test-personal-drive")
 async def test_personal_drive(current_user: str = Depends(get_current_user), drive_id: str = "drive_2"):
@@ -2260,23 +2281,13 @@ async def test_personal_drive(current_user: str = Depends(get_current_user), dri
 @app.get("/debug/share/{share_token}")
 async def debug_share_link(share_token: str):
     """Debug endpoint to check share link status"""
-    # Search across all databases for the share token
-    doc = None
-    found_db = None
-    for db_name, db_client in db_manager.firestore_clients.items():
-        try:
-            test_doc = db_client.collection('share_links').document(share_token).get()
-            if test_doc.exists:
-                doc = test_doc
-                found_db = db_name
-                break
-        except Exception as e:
-            continue
-    
-    if not doc or not doc.exists:
-        return {"error": "Share link not found"}
+    if not db:
+        return {"error": "Database not available"}
     
     try:
+        doc = db.collection('share_links').document(share_token).get()
+        if not doc.exists:
+            return {"error": "Share link not found"}
         
         data = doc.to_dict()
         current_time = datetime.utcnow()
@@ -2379,7 +2390,6 @@ def verify_totp_token(secret: str, token: str):
 
 def get_user_2fa_data(user_email: str):
     """Get user's 2FA data from Firestore"""
-    db = db_manager.get_database_for_user(user_email)
     if not db:
         return None
     try:
@@ -2392,7 +2402,6 @@ def get_user_2fa_data(user_email: str):
 
 def save_user_2fa_data(user_email: str, data: dict):
     """Save user's 2FA data to Firestore"""
-    db = db_manager.get_database_for_user(user_email)
     if not db:
         return False
     try:
@@ -2523,7 +2532,6 @@ async def disable_2fa(
     
     # Delete 2FA data
     try:
-        db = db_manager.get_database_for_user(current_user)
         if db:
             db.collection('user_2fa').document(current_user).delete()
         return {"message": "2FA disabled successfully"}
@@ -2658,7 +2666,6 @@ async def generate_share_link(request: ShareLinkRequest, current_user: str = Dep
 @app.get("/share/my-links")
 async def get_user_shared_links(current_user: str = Depends(get_current_user)):
     """Get all shared links created by the current user"""
-    db = db_manager.get_database_for_user(current_user)
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -2683,7 +2690,6 @@ async def get_user_shared_links(current_user: str = Depends(get_current_user)):
 @app.get("/share/analytics")
 async def get_share_analytics(current_user: str = Depends(get_current_user)):
     """Get sharing analytics for current user"""
-    db = db_manager.get_database_for_user(current_user)
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -2738,7 +2744,6 @@ async def get_share_analytics(current_user: str = Depends(get_current_user)):
 @app.get("/share/list")
 async def list_user_shares(current_user: str = Depends(get_current_user)):
     """List all share links created by current user"""
-    db = db_manager.get_database_for_user(current_user)
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -2793,14 +2798,9 @@ async def list_user_shares(current_user: str = Depends(get_current_user)):
 
 @app.get("/share/{share_token}")
 async def access_shared_file(share_token: str):
-    # Get share token from database
-    if not db_manager.db:
-        raise HTTPException(status_code=500, detail="Database not available")
-    
-    doc = db_manager.db.collection('share_links').document(share_token).get()
-    
-    if not doc or not doc.exists:
-        raise HTTPException(status_code=404, detail="Share link not found")
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
     data = doc.to_dict()
     
     # Check if link is expired by time
@@ -2869,14 +2869,9 @@ async def access_shared_file(share_token: str):
 
 @app.get("/share/{share_token}/preview")
 async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
-    # Get share token from database
-    if not db_manager.db:
-        raise HTTPException(status_code=500, detail="Database not available")
-    
-    doc = db_manager.db.collection('share_links').document(share_token).get()
-    
-    if not doc or not doc.exists:
-        raise HTTPException(status_code=404, detail="Share link not found")
+    if not db: raise HTTPException(status_code=500, detail="Database not available")
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
     data = doc.to_dict()
     
     # Check if link is expired by time
@@ -3005,13 +3000,11 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
 
 @app.get("/share/{share_token}/download")
 async def download_shared_file(share_token: str, file_id: Optional[str] = None):
-    # Get share token from database
-    if not db_manager.db:
+    if not db: 
         raise HTTPException(status_code=500, detail="Database not available")
     
-    doc = db_manager.db.collection('share_links').document(share_token).get()
-    
-    if not doc or not doc.exists:
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists: 
         raise HTTPException(status_code=404, detail="Share link not found")
     
     data = doc.to_dict()
@@ -3120,8 +3113,6 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
 @app.post("/share/{share_token}/expire")
 async def expire_shared_link(share_token: str, current_user: str = Depends(get_current_user)):
     """Expire a shared link"""
-    # Find the share link in user's database
-    db = db_manager.get_database_for_user(current_user)
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
@@ -3151,8 +3142,6 @@ async def expire_shared_link(share_token: str, current_user: str = Depends(get_c
 @app.delete("/share/{share_token}")
 async def delete_share_link(share_token: str, current_user: str = Depends(get_current_user)):
     """Delete a share link"""
-    # Find the share link in user's database
-    db = db_manager.get_database_for_user(current_user)
     if not db:
         raise HTTPException(status_code=500, detail="Database not available")
     
