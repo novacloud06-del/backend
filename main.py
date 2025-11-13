@@ -332,53 +332,66 @@ def get_all_users_from_firestore():
         return []
 
 def cleanup_user_data(user_email: str):
-    """Permanent cleanup using transactions to prevent cache issues"""
+    """Simple and reliable cleanup of all user data from Firestore"""
     if not db:
         print("Firestore not available")
         return False
     
-    @firestore.transactional
-    def delete_user_transaction(transaction):
-        collections_to_clean = [
-            'users',
-            'user_2fa', 
-            'user_drive_tokens',
-            'email_change_requests'
-        ]
-        
-        # Delete from regular collections
-        for collection_name in collections_to_clean:
+    cleanup_results = {}
+    collections_to_clean = [
+        'users',
+        'user_2fa', 
+        'user_drive_tokens',
+        'email_change_requests'
+    ]
+    
+    # Use batch delete for better reliability
+    batch = db.batch()
+    
+    # Clean up regular collections
+    for collection_name in collections_to_clean:
+        try:
             doc_ref = db.collection(collection_name).document(user_email)
-            transaction.delete(doc_ref)
-        
-        # Delete share links
+            batch.delete(doc_ref)
+            cleanup_results[collection_name] = "queued_for_deletion"
+            print(f"Queued {collection_name} for deletion: {user_email}")
+        except Exception as e:
+            cleanup_results[collection_name] = f"error: {str(e)}"
+            print(f"Error queuing {collection_name} for deletion: {str(e)}")
+    
+    # Get and queue share links for deletion
+    try:
         shares_ref = db.collection('share_links')
         query = shares_ref.where('owner_email', '==', user_email)
         docs = list(query.stream())
         
         for doc in docs:
-            transaction.delete(doc.reference)
+            batch.delete(doc.reference)
         
-        return len(docs)
-    
-    try:
-        # Execute transaction
-        transaction = db.transaction()
-        share_count = delete_user_transaction(transaction)
-        
-        print(f"✓ Transaction completed - deleted user data and {share_count} share links for {user_email}")
-        
-        return {
-            'users': 'deleted',
-            'user_2fa': 'deleted', 
-            'user_drive_tokens': 'deleted',
-            'email_change_requests': 'deleted',
-            'share_links': f'deleted_{share_count}'
-        }
+        cleanup_results['share_links'] = f"queued_{len(docs)}_for_deletion"
+        print(f"Queued {len(docs)} share links for deletion")
         
     except Exception as e:
-        print(f"✗ Transaction failed: {str(e)}")
-        return {'error': str(e)}
+        cleanup_results['share_links'] = f"error: {str(e)}"
+        print(f"Error queuing share links for deletion: {str(e)}")
+    
+    # Execute batch delete
+    try:
+        batch.commit()
+        print(f"✓ Batch deletion committed for {user_email}")
+        
+        # Update results to reflect successful deletion
+        for key in cleanup_results:
+            if "queued" in cleanup_results[key]:
+                cleanup_results[key] = cleanup_results[key].replace("queued", "deleted")
+        
+    except Exception as e:
+        print(f"✗ Batch deletion failed: {str(e)}")
+        for key in cleanup_results:
+            if "queued" in cleanup_results[key]:
+                cleanup_results[key] = f"batch_error: {str(e)}"
+    
+    return cleanup_results
 
 
 
@@ -566,19 +579,12 @@ async def check_user_exists(email: str):
     except:
         firebase_exists = False
     
-    # If user doesn't exist in Firebase Auth, they don't exist
+    # If user doesn't exist in Firebase Auth, they don't exist (even if orphaned data in Firestore)
     if not firebase_exists:
         return {"exists": False}
     
-    # Use server timestamp to bypass cache when checking Firestore
-    firestore_exists = False
-    if db:
-        try:
-            # Force fresh read from server, not cache
-            doc = db.collection('users').document(email).get()
-            firestore_exists = doc.exists
-        except:
-            firestore_exists = False
+    # If user exists in Firebase Auth, check Firestore
+    firestore_exists = check_user_exists_in_firestore(email)
     
     return {
         "exists": firebase_exists,
@@ -3060,6 +3066,9 @@ class ShareLinkRequest(BaseModel):
     drive_id: str = "drive_1"
     view_limit: Optional[int] = None  # None means unlimited views
 
+class ShareRequest(BaseModel):
+    recipient_email: str
+
 
 
 
@@ -3665,3 +3674,151 @@ async def delete_share_link(share_token: str, current_user: str = Depends(get_cu
     except Exception as e:
         print(f"Error deleting share link: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to delete share link")
+
+# Shared Files Endpoints
+@app.get("/user/check-exists")
+async def check_user_exists_endpoint(email: str):
+    """Check if user exists in NovaCloud"""
+    try:
+        auth.get_user_by_email(email)
+        return {"exists": True}
+    except:
+        return {"exists": False}
+
+@app.get("/shared/with-me")
+async def get_shared_with_me(current_user: str = Depends(get_current_user)):
+    """Get files shared with current user"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        shares_ref = db.collection('user_shares')
+        query = shares_ref.where('recipient_email', '==', current_user)
+        docs = list(query.stream())
+        
+        shares = []
+        for doc in docs:
+            share_data = doc.to_dict()
+            share_data['id'] = doc.id
+            shares.append(share_data)
+        
+        shares.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        return shares
+        
+    except Exception as e:
+        print(f"Error getting shared with me: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get shared files")
+
+@app.get("/shared/by-me")
+async def get_shared_by_me(current_user: str = Depends(get_current_user)):
+    """Get files shared by current user"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        shares_ref = db.collection('user_shares')
+        query = shares_ref.where('sender_email', '==', current_user)
+        docs = list(query.stream())
+        
+        shares = []
+        for doc in docs:
+            share_data = doc.to_dict()
+            share_data['id'] = doc.id
+            shares.append(share_data)
+        
+        shares.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        return shares
+        
+    except Exception as e:
+        print(f"Error getting shared by me: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get shared files")
+
+@app.post("/shared/send")
+async def send_share_request(request: ShareRequest, current_user: str = Depends(get_current_user)):
+    """Send share request to another user"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    if request.recipient_email == current_user:
+        raise HTTPException(status_code=400, detail="Cannot share with yourself")
+    
+    # Check if recipient exists
+    try:
+        auth.get_user_by_email(request.recipient_email)
+    except:
+        raise HTTPException(status_code=404, detail="User not found in NovaCloud")
+    
+    try:
+        share_data = {
+            'sender_email': current_user,
+            'recipient_email': request.recipient_email,
+            'status': 'pending',
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        db.collection('user_shares').add(share_data)
+        return {"message": "Share request sent successfully"}
+        
+    except Exception as e:
+        print(f"Error sending share request: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send share request")
+
+@app.post("/shared/accept/{share_id}")
+async def accept_share_request(share_id: str, current_user: str = Depends(get_current_user)):
+    """Accept share request"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('user_shares').document(share_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share request not found")
+        
+        share_data = doc.to_dict()
+        if share_data.get('recipient_email') != current_user:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        doc_ref.update({
+            'status': 'accepted',
+            'accepted_at': datetime.utcnow().isoformat()
+        })
+        
+        return {"message": "Share request accepted"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error accepting share: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to accept share request")
+
+@app.post("/shared/reject/{share_id}")
+async def reject_share_request(share_id: str, current_user: str = Depends(get_current_user)):
+    """Reject share request"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('user_shares').document(share_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share request not found")
+        
+        share_data = doc.to_dict()
+        if share_data.get('recipient_email') != current_user:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        doc_ref.update({
+            'status': 'rejected',
+            'rejected_at': datetime.utcnow().isoformat()
+        })
+        
+        return {"message": "Share request rejected"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error rejecting share: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to reject share request")
