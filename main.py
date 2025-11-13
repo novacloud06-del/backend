@@ -36,10 +36,25 @@ app = FastAPI(title="Novacloud API")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://novacloud22.web.app",
+        "https://novacloud22.firebaseapp.com", 
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "*"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allow_headers=[
+        "*",
+        "Authorization", 
+        "Content-Type", 
+        "Accept", 
+        "Origin", 
+        "X-Requested-With",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers"
+    ],
 )
 
 # Security
@@ -381,9 +396,22 @@ def update_user_storage(user_email: str):
 async def root():
     return {"message": "Novacloud API - Made in India 🇮🇳 - v2.1"}
 
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    return {"message": "OK"}
+
 @app.get("/test-share")
 async def test_share_endpoint():
     return {"message": "Share endpoints are working"}
+
+@app.get("/test-cors")
+async def test_cors():
+    return {
+        "message": "CORS test successful",
+        "timestamp": datetime.utcnow().isoformat(),
+        "firebase_initialized": auth_app is not None,
+        "firestore_count": db_manager.database_count
+    }
 
 @app.get("/health")
 async def health_check():
@@ -398,8 +426,11 @@ async def health_check():
     }
 
 @app.post("/check-user-exists")
-async def check_user_exists(email: str):
+async def check_user_exists(request: dict):
     """Check if user exists in database"""
+    email = request.get('email')
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
     return {"exists": check_user_exists_in_firestore(email)}
 
 @app.post("/register-user")
