@@ -1945,7 +1945,8 @@ async def download_file(
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_filename}"',
                 "Cache-Control": "no-cache",
-                "Accept-Ranges": "bytes"
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_metadata.get('size', 0))
             }
         )
         
