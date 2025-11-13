@@ -52,6 +52,9 @@ if not auth_app:
 else:
     print(f"✓ Firebase Auth initialized with {db_manager.database_count} Firestore databases")
 
+# For backward compatibility - get a default database reference
+db = db_manager.get_database_for_user('default') if db_manager.database_count > 0 else None
+
 # Google OAuth settings
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -80,7 +83,7 @@ user_tokens = load_json_file(TOKENS_FILE)
 user_sessions = load_json_file(SESSIONS_FILE)
 # Test multi-database setup
 if db_manager.database_count > 0:
-    print(f"✓ Multi-database setup successful with {db_manager.database_count} databases")
+    print(f"✓ {db_manager.database_count} Firestore database(s) initialized")
 else:
     print("✗ No Firestore databases initialized")
 active_connections = {}
