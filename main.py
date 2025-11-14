@@ -221,15 +221,24 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         # Ensure user exists in Firestore
         user_data = get_user_from_firestore(user_identifier)
         if not user_data:
-            print(f"User {user_identifier} not found in Firestore, creating record")
+            print(f"User {user_identifier} not found in Firestore but exists in Firebase Auth - this may indicate account was deleted and recreated")
             # Auto-create user record if missing
             try:
                 firebase_user = auth.get_user(uid)
+                
+                # Determine auth method based on provider data
+                auth_method = "email"
+                provider_data = firebase_user.provider_data or []
+                if any(p.provider_id == 'github.com' for p in provider_data):
+                    auth_method = "github"
+                elif any(p.provider_id == 'google.com' for p in provider_data):
+                    auth_method = "google"
+                
                 new_user = {
                     "email": email,
                     "name": firebase_user.display_name or email.split('@')[0],
                     "uid": uid,
-                    "auth_method": "email",
+                    "auth_method": auth_method,
                     "created_at": datetime.utcnow().isoformat(),
                     "storage_used": 0,
                     "total_files": 0,
@@ -239,7 +248,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
                     "email_verified": email_verified
                 }
                 save_user_to_firestore(user_identifier, new_user)
-                print(f"Auto-created user record for {user_identifier}")
+                print(f"Auto-created user record for {user_identifier} with auth method: {auth_method}")
             except Exception as create_error:
                 print(f"Failed to auto-create user record: {str(create_error)}")
         
@@ -422,14 +431,12 @@ def check_user_exists_in_firestore(user_identifier: str):
     if not db:
         return False
     try:
-        # First try by email/identifier
+        # Check by email/identifier
         doc_ref = db.collection('users').document(user_identifier)
         doc = doc_ref.get()
         if doc.exists:
             print(f"Firestore check for {user_identifier}: True")
             return True
-        
-
         
         print(f"Firestore check for {user_identifier}: False")
         return False
@@ -939,9 +946,10 @@ async def register_user(user_data: UserCreate, current_user: Optional[str] = Dep
         
         # If UID is different, this is a new Firebase user with same email (after deletion)
         if existing_uid != user_data.uid:
-            print(f"UID mismatch - old: {existing_uid}, new: {user_data.uid}. Overwriting with new user data.")
+            print(f"UID mismatch - old: {existing_uid}, new: {user_data.uid}. This indicates account was deleted and recreated.")
             
             # Clean up any orphaned data first
+            print(f"Cleaning up orphaned data for {user_data.email}")
             cleanup_user_data(user_data.email)
             
             # Create completely new user record
@@ -963,8 +971,8 @@ async def register_user(user_data: UserCreate, current_user: Optional[str] = Dep
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to register user")
             
-            print(f"Successfully overwritten user data for {user_data.email}")
-            return {"message": "User registered successfully"}
+            print(f"Successfully created new user record for {user_data.email} after account deletion")
+            return {"message": "Account recreated successfully"}
         else:
             # Same UID, just update login time and potentially update name if we got GitHub username
             print(f"Same UID, updating login time for {user_data.email}")
@@ -973,7 +981,7 @@ async def register_user(user_data: UserCreate, current_user: Optional[str] = Dep
                 updates["name"] = github_username
                 print(f"Updated name to GitHub username: {github_username}")
             update_user_in_firestore(user_data.email, updates)
-            return {"message": "User login successful"}
+            return {"message": "Welcome back!"}
     
     # Create new user (no existing record)
     print(f"Creating new user record for {user_data.email}")
