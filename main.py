@@ -2881,12 +2881,16 @@ async def send_verification_email(current_user: str = Depends(get_current_user))
             raise HTTPException(status_code=400, detail="Email is already verified")
         
         # Generate email verification link - Firebase will send the email
+        from firebase_admin.auth import ActionCodeSettings
+        
+        action_code_settings = ActionCodeSettings(
+            url=f"{os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')}/dashboard",
+            handle_code_in_app=False
+        )
+        
         verification_link = auth.generate_email_verification_link(
             current_user,
-            action_code_settings={
-                'url': f"{os.getenv('FRONTEND_URL', 'https://novacloud22.web.app')}/dashboard",
-                'handleCodeInApp': False
-            }
+            action_code_settings=action_code_settings
         )
         
         print(f"Verification email sent to {current_user}")
