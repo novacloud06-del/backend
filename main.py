@@ -19,16 +19,41 @@ import base64
 from io import BytesIO
 import secrets
 import hashlib
+import threading
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
+from google.auth.transport.requests import Request as GoogleRequest
 from dotenv import load_dotenv
 from parallel_api import parallel_processor, async_parallel
 
 load_dotenv()
+
+# Dynamic chunk sizing for better performance
+def get_optimal_chunk_size(file_size: int) -> int:
+    """Get optimal chunk size based on file size for faster downloads"""
+    if file_size > 500 * 1024 * 1024:  # >500MB
+        return 8 * 1024 * 1024  # 8MB
+    elif file_size > 100 * 1024 * 1024:  # >100MB
+        return 4 * 1024 * 1024  # 4MB
+    elif file_size > 10 * 1024 * 1024:  # >10MB
+        return 2 * 1024 * 1024  # 2MB
+    return 1024 * 1024  # 1MB default
+
+# Connection pooling for Google API
+_http_session = None
+_session_lock = threading.Lock()
+
+def get_http_session():
+    global _http_session
+    if _http_session is None:
+        with _session_lock:
+            if _http_session is None:
+                _http_session = GoogleRequest()
+    return _http_session
 
 app = FastAPI(title="Novacloud API")
 
@@ -1435,7 +1460,9 @@ async def stream_file(
     def generate_stream():
         request = service.files().get_media(fileId=file_id)
         file_io = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request, chunksize=1024*1024)
+        file_size = int(file_metadata.get('size', 0))
+        chunk_size = get_optimal_chunk_size(file_size)
+        downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
         
         done = False
         while not done:
@@ -1881,7 +1908,9 @@ async def download_file(
         def generate_stream():
             request = service.files().get_media(fileId=file_id)
             file_io = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_io, request, chunksize=128*1024)  # Optimized chunk size
+            file_size = int(file_metadata.get('size', 0))
+            chunk_size = get_optimal_chunk_size(file_size)
+            downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
             
             done = False
             while not done:
@@ -1947,8 +1976,10 @@ async def download_file(
             media_type=proper_mime_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_filename}"',
-                "Cache-Control": "no-cache",
-                "Accept-Ranges": "bytes"
+                "Cache-Control": "public, max-age=3600",
+                "Accept-Ranges": "bytes",
+                "Connection": "keep-alive",
+                "Content-Length": str(file_size)
             }
         )
         
@@ -3722,7 +3753,9 @@ async def download_shared_file(share_token: str, file_id: Optional[str] = None):
     def generate_stream():
         request = service.files().get_media(fileId=target_file_id)
         file_io = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request, chunksize=128*1024)  # Optimized chunk size
+        file_size = int(file_metadata.get('size', 0))
+        chunk_size = get_optimal_chunk_size(file_size)
+        downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
         
         done = False
         while not done:
