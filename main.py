@@ -1391,6 +1391,46 @@ def get_drive_service(current_user: str, use_personal_drive: bool = False, drive
         return get_user_google_service(current_user, drive_id)
     return get_google_service()
 
+@app.get("/direct-download/{file_id}")
+async def get_direct_download_url(
+    file_id: str,
+    use_personal_drive: bool = False,
+    drive_id: str = "drive_1",
+    current_user: Optional[str] = Depends(get_optional_current_user)
+):
+    """Get direct Google Drive download URL for a single file"""
+    if use_personal_drive and not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required for personal drive")
+    
+    service = get_drive_service(current_user or '', use_personal_drive, drive_id)
+    if not service:
+        raise HTTPException(status_code=400, detail="Google Drive service not available")
+    
+    try:
+        # Get file metadata to verify access
+        file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
+        
+        # Generate direct download URL
+        direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        
+        return {
+            "success": True,
+            "file_id": file_id,
+            "file_name": file_metadata.get('name'),
+            "direct_url": direct_url,
+            "size": file_metadata.get('size'),
+            "mime_type": file_metadata.get('mimeType')
+        }
+    except HttpError as e:
+        if e.resp.status == 404:
+            raise HTTPException(status_code=404, detail="File not found")
+        elif e.resp.status == 403:
+            raise HTTPException(status_code=403, detail="Access denied to file")
+        else:
+            raise HTTPException(status_code=500, detail=f"Google Drive error: {e.resp.status}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get direct URL: {str(e)}")
+
 @app.post("/direct-urls")
 async def get_direct_urls(
     file_ids: List[str],
@@ -1406,8 +1446,26 @@ async def get_direct_urls(
     if not service:
         raise HTTPException(status_code=400, detail="Google Drive service not available")
     
-    from parallel_api import get_direct_download_urls
-    results = await get_direct_download_urls(file_ids, service)
+    results = []
+    for file_id in file_ids:
+        try:
+            file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
+            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            
+            results.append({
+                "success": True,
+                "file_id": file_id,
+                "file_name": file_metadata.get('name'),
+                "direct_url": direct_url,
+                "size": file_metadata.get('size'),
+                "mime_type": file_metadata.get('mimeType')
+            })
+        except Exception as e:
+            results.append({
+                "success": False,
+                "file_id": file_id,
+                "error": str(e)
+            })
     
     return {
         "success": True,
@@ -3641,6 +3699,52 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
         headers=headers
     )
 
+@app.get("/share/{share_token}/direct-url")
+async def get_shared_file_direct_url(share_token: str, file_id: Optional[str] = None):
+    """Get direct download URL for shared file"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    doc = db.collection('share_links').document(share_token).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    
+    data = doc.to_dict()
+    
+    # Check if link is expired
+    if data.get('expires_at'):
+        try:
+            expires_at_str = data['expires_at']
+            if expires_at_str.endswith('Z'):
+                expires_at_str = expires_at_str[:-1]
+            expires_at = datetime.fromisoformat(expires_at_str)
+            if datetime.utcnow() >= expires_at:
+                raise HTTPException(status_code=410, detail="Share link expired")
+        except ValueError:
+            raise HTTPException(status_code=410, detail="Share link expired")
+    
+    # Check view limit
+    current_views = data.get('access_count', 0)
+    view_limit = data.get('view_limit')
+    if view_limit is not None and current_views >= view_limit:
+        raise HTTPException(status_code=410, detail="Share link expired - view limit reached")
+    
+    if not data.get('allow_download', True):
+        raise HTTPException(status_code=403, detail="Download not allowed")
+    
+    target_file_id = file_id if file_id else data['file_id']
+    direct_url = f"https://drive.google.com/uc?export=download&id={target_file_id}"
+    
+    # Update access count
+    doc.reference.update({'access_count': current_views + 1})
+    
+    return {
+        "success": True,
+        "file_id": target_file_id,
+        "file_name": data.get('file_name'),
+        "direct_url": direct_url
+    }
+
 @app.get("/share/{share_token}/download")
 async def download_shared_file(share_token: str, file_id: Optional[str] = None):
     if not db: 
@@ -4119,6 +4223,46 @@ async def preview_shared_email_file(share_id: str, current_user: Optional[str] =
     except Exception as e:
         print(f"Error previewing shared file: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to preview file")
+
+@app.get("/shared/email/{share_id}/direct-url")
+async def get_shared_email_file_direct_url(share_id: str):
+    """Get direct download URL for email shared file"""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not available")
+    
+    try:
+        doc_ref = db.collection('email_shares').document(share_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Share not found")
+        
+        share_data = doc.to_dict()
+        
+        # Check if share is active and not expired
+        if share_data.get('status') != 'active':
+            raise HTTPException(status_code=403, detail="Share is not active")
+        
+        if share_data.get('expires_at'):
+            expires_at = datetime.fromisoformat(share_data['expires_at'].replace('Z', ''))
+            if datetime.utcnow() > expires_at:
+                raise HTTPException(status_code=410, detail="Share has expired")
+        
+        file_id = share_data['file_id']
+        direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        
+        return {
+            "success": True,
+            "file_id": file_id,
+            "file_name": share_data.get('file_name'),
+            "direct_url": direct_url
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting direct URL for shared file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get direct URL")
 
 @app.get("/shared/email/{share_id}/download")
 async def download_shared_email_file(share_id: str, current_user: Optional[str] = Depends(get_optional_current_user)):
