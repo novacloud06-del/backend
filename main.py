@@ -2140,19 +2140,7 @@ async def preview_file(
         if use_personal_drive and not current_user:
             raise HTTPException(status_code=401, detail="Authentication required for personal drive access")
         
-        # Check if browser Google account matches NovaCloud account
-        if use_personal_drive and current_user:
-            service = get_user_google_service(current_user, drive_id)
-            if service:
-                try:
-                    about = service.about().get(fields="user").execute()
-                    google_email = about.get('user', {}).get('emailAddress')
-                    if google_email and google_email != current_user:
-                        raise HTTPException(status_code=403, detail=f"Browser logged into {google_email} but NovaCloud expects {current_user}. Please switch Google accounts.")
-                except Exception as e:
-                    if "Browser logged into" in str(e):
-                        raise
-                    raise HTTPException(status_code=401, detail="Personal drive authentication failed")
+        # Note: Removed strict account mismatch check - backend uses stored tokens
         
         service = get_drive_service(current_user or '', use_personal_drive, drive_id)
         if not service:
@@ -2254,19 +2242,7 @@ async def download_file(
         if use_personal_drive and not current_user:
             raise HTTPException(status_code=401, detail="Authentication required for personal drive access")
         
-        # Check if browser Google account matches NovaCloud account
-        if use_personal_drive and current_user:
-            service = get_user_google_service(current_user, drive_id)
-            if service:
-                try:
-                    about = service.about().get(fields="user").execute()
-                    google_email = about.get('user', {}).get('emailAddress')
-                    if google_email and google_email != current_user:
-                        raise HTTPException(status_code=403, detail=f"Browser logged into {google_email} but NovaCloud expects {current_user}. Please switch Google accounts.")
-                except Exception as e:
-                    if "Browser logged into" in str(e):
-                        raise
-                    raise HTTPException(status_code=401, detail="Personal drive authentication failed")
+        # Note: Removed strict account mismatch check - backend uses stored tokens
         
         service = get_drive_service(current_user or '', use_personal_drive, drive_id)
         if not service:
