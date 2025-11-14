@@ -841,9 +841,28 @@ async def check_github_linked(githubEmail: str):
         return {"exists": False}
 
 @app.post("/register-user")
-async def register_user(user_data: UserCreate):
+async def register_user(user_data: UserCreate, current_user: Optional[str] = Depends(get_optional_current_user)):
     """Register a new user in the database"""
     print(f"Registering user: {user_data.email} with UID: {user_data.uid}")
+    
+    # If we have a current user (authenticated), try to get additional GitHub info
+    github_username = None
+    if current_user:
+        try:
+            # Get Firebase user to check provider data
+            firebase_user = auth.get_user(user_data.uid)
+            for provider in firebase_user.provider_data:
+                if provider.provider_id == 'github.com':
+                    # Try to extract GitHub username from provider data
+                    if hasattr(provider, 'display_name') and provider.display_name:
+                        github_username = provider.display_name
+                    break
+        except Exception as e:
+            print(f"Could not get GitHub username: {str(e)}")
+    
+    # Use GitHub username if available, otherwise use provided name
+    final_name = github_username if github_username else user_data.name
+    print(f"Using name: {final_name} (GitHub username: {github_username})")
     
     # Check if user already exists in Firestore
     existing_user = get_user_from_firestore(user_data.email)
@@ -861,7 +880,7 @@ async def register_user(user_data: UserCreate):
             # Create completely new user record
             new_user = {
                 "email": user_data.email,
-                "name": user_data.name,
+                "name": final_name,
                 "uid": user_data.uid,
                 "organization": user_data.organization,
                 "created_at": datetime.utcnow().isoformat(),
@@ -880,18 +899,20 @@ async def register_user(user_data: UserCreate):
             print(f"Successfully overwritten user data for {user_data.email}")
             return {"message": "User registered successfully"}
         else:
-            # Same UID, just update login time
+            # Same UID, just update login time and potentially update name if we got GitHub username
             print(f"Same UID, updating login time for {user_data.email}")
-            update_user_in_firestore(user_data.email, {
-                "last_login": datetime.utcnow().isoformat()
-            })
+            updates = {"last_login": datetime.utcnow().isoformat()}
+            if github_username and github_username != existing_user.get('name'):
+                updates["name"] = github_username
+                print(f"Updated name to GitHub username: {github_username}")
+            update_user_in_firestore(user_data.email, updates)
             return {"message": "User login successful"}
     
     # Create new user (no existing record)
     print(f"Creating new user record for {user_data.email}")
     new_user = {
         "email": user_data.email,
-        "name": user_data.name,
+        "name": final_name,
         "uid": user_data.uid,
         "organization": user_data.organization,
         "created_at": datetime.utcnow().isoformat(),
