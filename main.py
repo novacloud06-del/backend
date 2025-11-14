@@ -1971,6 +1971,7 @@ async def download_file(
         }
         proper_mime_type = mime_types.get(file_extension, 'application/octet-stream')
         
+        file_size = int(file_metadata.get('size', 0))
         return StreamingResponse(
             generate_stream(),
             media_type=proper_mime_type,
