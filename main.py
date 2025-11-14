@@ -2178,7 +2178,7 @@ async def preview_file(
         file_ext = file_name.split('.')[-1] if '.' in file_name else ''
         
         # Text files
-        if file_ext in ['txt', 'csv', 'log', 'md', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'htm', 'json', 'xml', 'yaml', 'yml', 'sql', 'php', 'rb', 'go', 'rs', 'kt', 'swift', 'dart', 'sh', 'bat', 'ps1', 'c', 'cpp', 'h', 'hpp', 'java', 'scala', 'r', 'lua', 'm', 'pl', 'ini', 'cfg', 'conf', 'toml']:
+        if file_ext in ['txt', 'csv', 'log', 'md', 'py', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'htm', 'json', 'xml', 'yaml', 'yml', 'sql', 'php', 'rb', 'go', 'rs', 'kt', 'swift', 'dart', 'sh', 'bat', 'ps1', 'c', 'cpp', 'h', 'hpp', 'java', 'scala', 'r', 'lua', 'm', 'pl', 'ini', 'cfg', 'conf', 'toml', 'rtf', 'properties', 'env']:
             mime_type = 'text/plain; charset=utf-8'
         # Images
         elif file_ext in ['jpg', 'jpeg']:
@@ -2194,8 +2194,12 @@ async def preview_file(
         # Documents
         elif file_ext == 'pdf':
             mime_type = 'application/pdf'
-        elif file_ext in ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']:
-            mime_type = 'application/octet-stream'  # Force download for Office files
+        elif file_ext in ['doc', 'docx']:
+            mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' if file_ext == 'docx' else 'application/msword'
+        elif file_ext in ['xls', 'xlsx']:
+            mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_ext == 'xlsx' else 'application/vnd.ms-excel'
+        elif file_ext in ['ppt', 'pptx']:
+            mime_type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' if file_ext == 'pptx' else 'application/vnd.ms-powerpoint'
         # Videos
         elif file_ext in ['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'mkv', 'm4v', '3gp', 'ogv']:
             mime_type = f'video/{"mp4" if file_ext == "m4v" else file_ext}'
