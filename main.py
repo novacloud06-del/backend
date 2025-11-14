@@ -2866,6 +2866,19 @@ async def set_password_for_oauth_user(
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to set password")
 
+@app.post("/test-email")
+async def test_email_sending(email: str = Form(...)):
+    """Test Firebase email verification only"""
+    try:
+        # Test verification email only
+        verification_link = auth.generate_email_verification_link(email)
+        print(f"✓ Verification email sent to {email}")
+        print(f"Link: {verification_link}")
+        
+        return {"message": "Verification email sent", "status": "success"}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.post("/resend-verification")
 async def resend_verification_fallback(current_user: str = Depends(get_current_user)):
     """Fallback endpoint for resend verification - redirects to correct endpoint"""
@@ -2880,14 +2893,19 @@ async def send_verification_email(current_user: str = Depends(get_current_user))
         if firebase_user.email_verified:
             raise HTTPException(status_code=400, detail="Email is already verified")
         
-        # Firebase Admin SDK only generates links, doesn't send emails
-        # Email must be sent from frontend using Firebase client SDK
-        print(f"Email verification requested for {current_user}")
-        
-        return {
-            "message": "Please use Firebase client SDK to send verification email",
-            "action": "SEND_FROM_FRONTEND"
-        }
+        # Generate and send verification email using Firebase Admin SDK
+        try:
+            verification_link = auth.generate_email_verification_link(current_user)
+            print(f"Verification email sent to {current_user}")
+            print(f"Verification link: {verification_link}")
+            
+            return {"message": "Verification email sent successfully"}
+        except Exception as e:
+            print(f"Failed to send verification email: {str(e)}")
+            return {
+                "message": "Please use Firebase client SDK to send verification email",
+                "action": "SEND_FROM_FRONTEND"
+            }
         
     except Exception as e:
         print(f"Error sending verification email: {str(e)}")
