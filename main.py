@@ -2880,13 +2880,14 @@ async def send_verification_email(current_user: str = Depends(get_current_user))
         if firebase_user.email_verified:
             raise HTTPException(status_code=400, detail="Email is already verified")
         
-        # Generate email verification link - Firebase will send the email
-        verification_link = auth.generate_email_verification_link(current_user)
+        # Firebase Admin SDK only generates links, doesn't send emails
+        # Email must be sent from frontend using Firebase client SDK
+        print(f"Email verification requested for {current_user}")
         
-        print(f"Verification email sent to {current_user}")
-        print(f"Verification link: {verification_link}")
-        
-        return {"message": "Verification email sent successfully"}
+        return {
+            "message": "Please use Firebase client SDK to send verification email",
+            "action": "SEND_FROM_FRONTEND"
+        }
         
     except Exception as e:
         print(f"Error sending verification email: {str(e)}")
