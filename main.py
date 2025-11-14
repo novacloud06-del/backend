@@ -469,8 +469,8 @@ def get_user_google_service(user_email: str, drive_id: str = "drive_1"):
         print(f"Error getting user Google service for {user_email} - {drive_id}: {str(e)}")
         return None
 
-def get_user_folder(service, user_name: str):
-    folder_name = user_name.replace(' ', '_')
+def get_user_folder(service, user_email: str):
+    folder_name = user_email.replace('@', '_at_').replace('.', '_')
     
     try:
         # Check if folder exists
@@ -494,12 +494,12 @@ def get_user_folder(service, user_name: str):
         print(f"Error in get_user_folder: {str(e)}")
         return None
 
-def create_user_folder(user_name: str):
+def create_user_folder(user_email: str):
     service = get_google_service()
     if not service:
         return None
     try:
-        return get_user_folder(service, user_name)
+        return get_user_folder(service, user_email)
     except:
         return None
 
@@ -1109,7 +1109,7 @@ async def create_single_folder(
         
         user_folder_id = user_data.get('folder_id')
         if not user_folder_id:
-            user_folder_id = get_user_folder(service, user_data['name'])
+            user_folder_id = get_user_folder(service, current_user)
             update_user_in_firestore(current_user, {'folder_id': user_folder_id})
         default_parent = user_folder_id
     
@@ -1249,7 +1249,7 @@ async def upload_single_file(
         
         user_folder_id = user_data.get('folder_id')
         if not user_folder_id:
-            user_folder_id = get_user_folder(service, user_data['name'])
+            user_folder_id = get_user_folder(service, current_user)
             if not user_folder_id:
                 raise HTTPException(status_code=500, detail="Failed to create or access user folder")
             update_user_in_firestore(current_user, {'folder_id': user_folder_id})
@@ -1262,7 +1262,7 @@ async def upload_single_file(
             if e.resp.status == 404:
                 # Folder was deleted, create new one
                 print(f"User folder {user_folder_id} not found, creating new one")
-                user_folder_id = get_user_folder(service, user_data['name'])
+                user_folder_id = get_user_folder(service, current_user)
                 if not user_folder_id:
                     raise HTTPException(status_code=500, detail="Failed to create user folder")
                 update_user_in_firestore(current_user, {'folder_id': user_folder_id})
@@ -1475,11 +1475,18 @@ async def stream_file(
                 file_io.seek(0)
                 file_io.truncate(0)
     
+    # Sanitize filename for headers
+    import re
+    safe_filename = re.sub(r'[<>:"/\\|?*]', '_', file_metadata["name"])
+    safe_filename = safe_filename.encode('ascii', 'ignore').decode('ascii')
+    if not safe_filename or safe_filename.strip() == '':
+        safe_filename = 'file'
+    
     return StreamingResponse(
         generate_stream(),
         media_type=file_metadata.get('mimeType', 'application/octet-stream'),
         headers={
-            'Content-Disposition': f'inline; filename="{file_metadata["name"]}"',
+            'Content-Disposition': f'inline; filename="{safe_filename}"',
             'Cache-Control': 'public, max-age=3600',
             'Accept-Ranges': 'bytes'
         }
@@ -1592,7 +1599,7 @@ async def list_files(
         user_folder_id = user_data.get('folder_id')
         if not user_folder_id:
             # Create user folder if it doesn't exist
-            user_folder_id = get_user_folder(service, user_data['name'])
+            user_folder_id = get_user_folder(service, current_user)
             if user_folder_id:
                 update_user_in_firestore(current_user, {'folder_id': user_folder_id})
             else:
@@ -1894,6 +1901,10 @@ async def download_file(
             
             folder_name = file_metadata['name']
             safe_folder_name = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
+            # Remove Unicode characters that can't be encoded in Latin-1
+            safe_folder_name = safe_folder_name.encode('ascii', 'ignore').decode('ascii')
+            if not safe_folder_name or safe_folder_name.strip() == '':
+                safe_folder_name = 'folder'
             
             return StreamingResponse(
                 generate_folder_zip(),
@@ -1929,7 +1940,9 @@ async def download_file(
         # Sanitize filename for download while preserving extension
         import re
         safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        if not safe_filename or safe_filename == '_':
+        # Remove Unicode characters that can't be encoded in Latin-1
+        safe_filename = safe_filename.encode('ascii', 'ignore').decode('ascii')
+        if not safe_filename or safe_filename.strip() == '':
             safe_filename = f'file.{file_extension}' if file_extension else 'file'
         
         # Comprehensive MIME type mapping
@@ -2252,7 +2265,7 @@ async def get_user_storage(current_user: str = Depends(get_current_user)):
     # Create folder if doesn't exist
     user_folder_id = user_data.get('folder_id')
     if not user_folder_id:
-        user_folder_id = get_user_folder(service, user_data['name'])
+        user_folder_id = get_user_folder(service, current_user)
         if user_folder_id:
             update_user_in_firestore(current_user, {'folder_id': user_folder_id})
     
@@ -2405,23 +2418,8 @@ async def update_profile(
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
     
-    old_name = user_data.get('name', '')
-    
-    # Update Google Drive folder name if it exists
-    service = get_google_service()
-    if service and user_data.get('folder_id'):
-        try:
-            old_folder_name = old_name.replace(' ', '_')
-            new_folder_name = name.replace(' ', '_')
-            
-            if old_folder_name != new_folder_name:
-                service.files().update(
-                    fileId=user_data['folder_id'],
-                    body={'name': new_folder_name}
-                ).execute()
-                print(f"Renamed folder from {old_folder_name} to {new_folder_name}")
-        except Exception as e:
-            print(f"Failed to rename Google Drive folder: {str(e)}")
+    # Note: Google Drive folders are now based on email addresses, not names
+    # so we don't need to rename folders when users change their display names
     
     # Update in Firestore
     if not update_user_in_firestore(current_user, {'name': name}):
@@ -3953,9 +3951,25 @@ async def get_shared_with_me(current_user: str = Depends(get_current_user)):
         docs = list(query.stream())
         
         shares = []
+        current_time = datetime.utcnow()
+        
         for doc in docs:
             share_data = doc.to_dict()
             share_data['id'] = doc.id
+            
+            # Skip expired or deleted shares
+            if share_data.get('status') == 'expired':
+                continue
+                
+            # Check if share has expired by time
+            if share_data.get('expires_at'):
+                try:
+                    expires_at = datetime.fromisoformat(share_data['expires_at'].replace('Z', ''))
+                    if current_time > expires_at:
+                        continue
+                except ValueError:
+                    continue
+            
             shares.append(share_data)
         
         shares.sort(key=lambda x: x.get('created_at', ''), reverse=True)
@@ -3977,9 +3991,25 @@ async def get_shared_by_me(current_user: str = Depends(get_current_user)):
         docs = list(query.stream())
         
         shares = []
+        current_time = datetime.utcnow()
+        
         for doc in docs:
             share_data = doc.to_dict()
             share_data['id'] = doc.id
+            
+            # Skip expired or deleted shares
+            if share_data.get('status') == 'expired':
+                continue
+                
+            # Check if share has expired by time
+            if share_data.get('expires_at'):
+                try:
+                    expires_at = datetime.fromisoformat(share_data['expires_at'].replace('Z', ''))
+                    if current_time > expires_at:
+                        continue
+                except ValueError:
+                    continue
+            
             shares.append(share_data)
         
         shares.sort(key=lambda x: x.get('created_at', ''), reverse=True)
@@ -4238,7 +4268,12 @@ async def download_shared_email_file(share_id: str, current_user: Optional[str] 
             
             folder_name = file_metadata['name']
             import re
-            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', folder_name) + '.zip'
+            safe_filename = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
+            # Remove Unicode characters that can't be encoded in Latin-1
+            safe_filename = safe_filename.encode('ascii', 'ignore').decode('ascii')
+            if not safe_filename or safe_filename.strip() == '':
+                safe_filename = 'folder'
+            safe_filename += '.zip'
             
             return StreamingResponse(
                 generate_folder_zip(),
@@ -4270,6 +4305,11 @@ async def download_shared_email_file(share_id: str, current_user: Optional[str] 
         filename = file_metadata.get('name', 'file')
         import re
         safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Remove Unicode characters that can't be encoded in Latin-1
+        safe_filename = safe_filename.encode('ascii', 'ignore').decode('ascii')
+        if not safe_filename or safe_filename.strip() == '':
+            file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
+            safe_filename = f'file.{file_extension}' if file_extension else 'file'
         
         # Comprehensive MIME type mapping for download
         file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
