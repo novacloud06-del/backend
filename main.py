@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, WebSocket
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, WebSocket, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse
@@ -201,18 +201,6 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except Exception as e:
         print(f"Auth Error: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-
-def get_optional_current_user(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))):
-    if not credentials:
-        return None
-    try:
-        decoded_token = auth.verify_id_token(credentials.credentials)
-        return decoded_token.get('email')
-    except Exception as e:
-        print(f"Optional auth error: {str(e)}")
-        return None
-
-
 
 def get_google_service():
     shared_tokens = load_json_file('shared_tokens.json')
@@ -1700,11 +1688,24 @@ async def get_folder_contents(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch folder contents: {str(e)}")
 
-def get_optional_current_user(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer(auto_error=False))):
-    if not credentials:
-        return None
+def get_optional_current_user(request: Request):
+    """Custom optional auth that handles null tokens gracefully"""
     try:
-        decoded_token = auth.verify_id_token(credentials.credentials)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return None
+        
+        if not auth_header.startswith('Bearer '):
+            return None
+            
+        token = auth_header[7:]  # Remove 'Bearer ' prefix
+        
+        # Handle null/undefined tokens
+        if not token or token in ['null', 'undefined', '', 'None']:
+            print(f"Ignoring invalid token: {token}")
+            return None
+            
+        decoded_token = auth.verify_id_token(token)
         return decoded_token.get('email')
     except Exception as e:
         print(f"Optional auth error: {str(e)}")
@@ -1812,11 +1813,14 @@ async def preview_file(
 @app.get("/download/{file_id}")
 async def download_file(
     file_id: str, 
+    request: Request,
     use_personal_drive: bool = False,
-    drive_id: str = "drive_1",
-    current_user: Optional[str] = Depends(get_optional_current_user)
+    drive_id: str = "drive_1"
 ):
     try:
+        # Get current user from request
+        current_user = get_optional_current_user(request)
+        
         # For personal drive, authentication is required
         if use_personal_drive and not current_user:
             raise HTTPException(status_code=401, detail="Authentication required for personal drive access")
