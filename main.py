@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from parallel_api import parallel_processor, async_parallel
 from fast_download import create_fast_download_stream
 from fast_endpoints import fast_download_handler
+from optimized_upload import process_optimized_batch_upload, get_upload_stats
 
 load_dotenv()
 
@@ -39,14 +40,14 @@ load_dotenv()
 def get_optimal_chunk_size(file_size: int) -> int:
     """Get optimal chunk size based on file size for faster downloads"""
     if file_size > 500 * 1024 * 1024:  # >500MB
-        return 16 * 1024 * 1024  # 16MB for very large files
+        return 32 * 1024 * 1024  # 32MB for very large files
     elif file_size > 100 * 1024 * 1024:  # >100MB
-        return 12 * 1024 * 1024  # 12MB for large files
+        return 24 * 1024 * 1024  # 24MB for large files
     elif file_size > 50 * 1024 * 1024:  # >50MB
-        return 8 * 1024 * 1024  # 8MB for medium files - FASTER
+        return 16 * 1024 * 1024  # 16MB for medium files
     elif file_size > 10 * 1024 * 1024:  # >10MB
-        return 4 * 1024 * 1024  # 4MB for small-medium files
-    return 2 * 1024 * 1024  # 2MB default - FASTER
+        return 8 * 1024 * 1024   # 8MB for small-medium files
+    return 4 * 1024 * 1024       # 4MB default
 
 def get_optimal_upload_chunk_size(file_size: int) -> int:
     """Get optimal chunk size for uploads based on file size"""
@@ -1536,6 +1537,55 @@ async def batch_upload_files(
                     detail=f"Email verification required. Unverified users can only upload 2 files total. You are trying to upload {len(files)} files but only have {max(0, 2 - total_files)} slots remaining."
                 )
     
+    # Use optimized batch upload for large batches (>10 files)
+    if len(files) > 10:
+        try:
+            # Get appropriate service
+            if use_personal_drive:
+                service = get_user_google_service(current_user, drive_id)
+                if not service:
+                    raise HTTPException(status_code=400, detail=f"Personal Google Drive {drive_id} not connected")
+                target_folder_id = folder_id or 'root'
+            else:
+                service = get_google_service()
+                if not service:
+                    raise HTTPException(status_code=500, detail="Shared Google Drive not configured")
+                
+                user_data = get_user_from_firestore(current_user)
+                if not user_data:
+                    raise HTTPException(status_code=404, detail="User not found")
+                
+                user_folder_id = user_data.get('folder_id')
+                if not user_folder_id:
+                    user_folder_id = get_user_folder(service, current_user)
+                    if not user_folder_id:
+                        raise HTTPException(status_code=500, detail="Failed to create user folder")
+                    update_user_in_firestore(current_user, {'folder_id': user_folder_id})
+                target_folder_id = folder_id or user_folder_id
+            
+            # Use optimized batch upload
+            result = await process_optimized_batch_upload(
+                files, service, target_folder_id, current_user, overwrite
+            )
+            
+            # Update storage for shared drive
+            if not use_personal_drive:
+                update_user_storage(current_user)
+            
+            # Update file count for unverified manual signup users
+            if needs_email_verification(current_user) and result['successful_uploads'] > 0:
+                user_data = get_user_from_firestore(current_user)
+                if user_data:
+                    new_count = user_data.get('total_files', 0) + result['successful_uploads']
+                    update_user_in_firestore(current_user, {'total_files': new_count})
+            
+            return result
+            
+        except Exception as e:
+            print(f"Optimized batch upload failed, falling back to standard: {str(e)}")
+            # Fall back to standard batch upload
+    
+    # Standard batch upload for smaller batches or fallback
     results = []
     errors = []
     
@@ -2707,8 +2757,8 @@ async def download_file(
         file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
         file_size = int(file_metadata.get('size', 0))
         
-        # Use fast download for files > 20MB
-        if file_size > 20 * 1024 * 1024:
+        # Use fast download for files > 10MB (especially important for personal drive)
+        if file_size > 10 * 1024 * 1024:
             return await fast_download_handler(file_id, service, file_metadata)
         
         # Check if it's a folder
@@ -3789,6 +3839,23 @@ async def debug_user_firestore_data(user_email: str):
         "data": user_data,
         "timestamp": datetime.utcnow().isoformat()
     }
+
+@app.get("/upload/stats")
+async def get_upload_statistics():
+    """Get current upload processor statistics"""
+    try:
+        stats = get_upload_stats()
+        return {
+            "success": True,
+            "stats": stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
 @app.get("/debug/share/{share_token}")
 async def debug_share_link(share_token: str):
