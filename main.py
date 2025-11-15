@@ -354,6 +354,9 @@ def get_google_service():
             else:
                 return None
         
+        # Create service with increased timeout
+        import socket
+        socket.setdefaulttimeout(120)  # 2 minutes
         return build('drive', 'v3', credentials=creds, cache_discovery=False)
     except Exception as e:
         print(f"Error getting Google service: {str(e)}")
@@ -562,6 +565,9 @@ def get_user_google_service(user_email: str, drive_id: str = "drive_1"):
                 print(f"Invalid credentials for {user_email} - {drive_id}")
                 return None
         
+        # Create service with increased timeout
+        import socket
+        socket.setdefaulttimeout(120)  # 2 minutes
         service = build('drive', 'v3', credentials=creds, cache_discovery=False)
         print(f"Successfully created service for {user_email} - {drive_id}")
         
