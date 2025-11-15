@@ -39,12 +39,16 @@ class OptimizedUploadProcessor:
     Optimized upload processor for handling large batches of files
     """
     
-    def __init__(self, max_workers: int = 10, chunk_size: int = 25):
+    def __init__(self, max_workers: int = 5, chunk_size: int = 10):
         self.max_workers = max_workers
         self.chunk_size = chunk_size
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.semaphore = asyncio.Semaphore(max_workers)
         self.active_uploads = weakref.WeakSet()
+        
+        # Set socket timeout
+        import socket
+        socket.setdefaulttimeout(180)  # 3 minutes
         
     async def process_batch_upload(
         self,
@@ -322,7 +326,7 @@ class ConnectionPool:
                     self.connections.append(connection)
 
 # Global instances
-upload_processor = OptimizedUploadProcessor(max_workers=10, chunk_size=25)
+upload_processor = OptimizedUploadProcessor(max_workers=3, chunk_size=5)
 connection_pool = ConnectionPool(max_connections=5)
 
 # Utility functions for integration with main.py
