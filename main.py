@@ -354,9 +354,9 @@ def get_google_service():
             else:
                 return None
         
-        # Create service with increased timeout
+        # Create service with faster timeout for previews
         import socket
-        socket.setdefaulttimeout(120)  # 2 minutes
+        socket.setdefaulttimeout(30)  # 30 seconds for faster previews
         return build('drive', 'v3', credentials=creds, cache_discovery=False)
     except Exception as e:
         print(f"Error getting Google service: {str(e)}")
@@ -565,9 +565,9 @@ def get_user_google_service(user_email: str, drive_id: str = "drive_1"):
                 print(f"Invalid credentials for {user_email} - {drive_id}")
                 return None
         
-        # Create service with increased timeout
+        # Create service with faster timeout for previews
         import socket
-        socket.setdefaulttimeout(120)  # 2 minutes
+        socket.setdefaulttimeout(30)  # 30 seconds for faster previews
         service = build('drive', 'v3', credentials=creds, cache_discovery=False)
         print(f"Successfully created service for {user_email} - {drive_id}")
         
@@ -1534,6 +1534,12 @@ async def batch_upload_files(
     overwrite: bool = Form(False),
     current_user: str = Depends(get_current_user)
 ):
+    # Limit batch upload to 10 files maximum
+    if len(files) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch upload limited to 10 files maximum. You are trying to upload {len(files)} files. Please upload in smaller batches."
+        )
     # Check email verification for batch upload limits (manual signup users only)
     if needs_email_verification(current_user):
         # Count existing files for unverified users
@@ -2566,21 +2572,28 @@ async def preview_file(
         if use_personal_drive and not current_user:
             raise HTTPException(status_code=401, detail="Authentication required for personal drive access")
         
-        # Note: Removed strict account mismatch check - backend uses stored tokens
-        
         service = get_drive_service(current_user or '', use_personal_drive, drive_id)
         if not service:
             drive_type = "Personal" if use_personal_drive else "Shared"
             raise HTTPException(status_code=400, detail=f"{drive_type} Google Drive not available")
         
-        # Get file metadata first
-        file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size').execute()
+        # Get file metadata with webViewLink for faster preview
+        file_metadata = service.files().get(fileId=file_id, fields='id,name,mimeType,size,webViewLink').execute()
         
-        # Stream file content directly without downloading to server
+        # For large files >50MB, redirect to Google Drive preview
+        file_size = int(file_metadata.get('size', 0))
+        if file_size > 50 * 1024 * 1024:
+            web_view_link = file_metadata.get('webViewLink')
+            if web_view_link:
+                return RedirectResponse(url=web_view_link)
+        
+        # Fast streaming with larger chunks for better performance
         def generate_stream():
             request = service.files().get_media(fileId=file_id)
             file_io = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_io, request, chunksize=1024*1024)
+            # Use larger chunks for faster streaming
+            chunk_size = 4 * 1024 * 1024  # 4MB chunks
+            downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
             
             done = False
             while not done:
@@ -4601,24 +4614,16 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
     if not doc.exists: raise HTTPException(status_code=404, detail="Share link not found")
     data = doc.to_dict()
     
-    # Check if link is expired by time with proper timezone handling
+    # Fast expiry check
     if data.get('expires_at'):
-        try:
-            expires_at_str = data['expires_at']
-            if expires_at_str.endswith('Z'):
-                expires_at_str = expires_at_str[:-1]
-            expires_at = datetime.fromisoformat(expires_at_str)
-            current_time = datetime.utcnow()
-            
-            print(f"Share preview check: Current UTC: {current_time.isoformat()}, Expires at: {expires_at.isoformat()}, Time diff: {(expires_at - current_time).total_seconds()} seconds")
-            
-            # Add 30 second buffer to account for processing time and network delays
-            if current_time > (expires_at + timedelta(seconds=30)):
-                print(f"Share link expired in preview: Current time {current_time.isoformat()} > Expiry time {expires_at.isoformat()} + 30s buffer")
-                raise HTTPException(status_code=410, detail="Share link expired")
-        except ValueError as e:
-            print(f"Invalid expiry time format in preview: {expires_at_str}, Error: {str(e)}")
+        expires_at_str = data['expires_at']
+        if expires_at_str.endswith('Z'):
+            expires_at_str = expires_at_str[:-1]
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if datetime.utcnow() > expires_at:
             raise HTTPException(status_code=410, detail="Share link expired")
+    
+
     
     # Check if view limit is reached
     current_views = data.get('access_count', 0)
