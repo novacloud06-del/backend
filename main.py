@@ -4724,7 +4724,9 @@ async def preview_shared_file(share_token: str, file_id: Optional[str] = None):
         try:
             request = service.files().get_media(fileId=target_file_id)
             file_io = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_io, request, chunksize=1024*1024)
+            file_size = int(file_metadata.get('size', 0))
+            chunk_size = get_optimal_chunk_size(file_size)
+            downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
             
             done = False
             while not done:
@@ -5242,7 +5244,9 @@ async def preview_shared_email_file(share_id: str, current_user: Optional[str] =
         def generate_stream():
             request = service.files().get_media(fileId=file_id)
             file_io = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_io, request, chunksize=1024*1024)
+            file_size = int(file_metadata.get('size', 0))
+            chunk_size = get_optimal_chunk_size(file_size)
+            downloader = MediaIoBaseDownload(file_io, request, chunksize=chunk_size)
             
             done = False
             while not done:
