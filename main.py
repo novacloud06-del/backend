@@ -78,6 +78,20 @@ def get_http_session():
 
 app = FastAPI(title="Novacloud API")
 
+from fastapi import Request, Response
+
+# Allow HEAD only for UptimeRobot
+@app.head("/")
+async def uptime_head(request: Request):
+    ua = request.headers.get("user-agent", "").lower()
+
+    # Allow only UptimeRobot pings
+    if "uptimerobot" in ua:
+        return Response(status_code=200)
+
+    # Block everyone else
+    return Response(status_code=405)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
